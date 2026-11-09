@@ -1,0 +1,1 @@
+"""MNEMORA backend application package."""
