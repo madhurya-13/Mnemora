@@ -25,6 +25,12 @@ class EmbeddingServiceError(RuntimeError):
     pass
 
 
+def is_configured() -> bool:
+    if settings.memory_embedding_provider == "google":
+        return bool(settings.google_api_key.strip())
+    return bool(settings.openai_api_key.strip())
+
+
 @lru_cache(maxsize=1)
 def _client():
     if not settings.openai_api_key.strip():

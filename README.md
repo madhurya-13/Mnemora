@@ -269,7 +269,11 @@ alembic upgrade head
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-The migration adds memory and background-operation tables; it does not replace or delete existing conversation data. Back up an existing SQLite database before schema changes. Conversation extraction uses Gemini. OpenAI embeddings may incur API usage charges; Google's Gemini Embedding free tier is available subject to its current usage limits and data handling terms. Automated tests mock both providers and do not use credits.
+The migrations add memory, background-operation, conflict, history and retrieval-audit tables; they do not replace or delete existing conversation data. Back up an existing SQLite database before schema changes. Conversation extraction uses Gemini. OpenAI embeddings may incur API usage charges; Google's Gemini Embedding free tier is available subject to its current usage limits and data handling terms. Automated tests mock both providers and do not use credits.
+
+### Milestone 5 retrieval benchmark
+
+Run the deterministic synthetic ranking benchmark from the repository root with `PYTHONPATH=backend python scripts/retrieval_benchmark.py` (PowerShell: `$env:PYTHONPATH="backend"; python scripts/retrieval_benchmark.py`). It fuses labeled SQL and semantic candidate orderings with the production reciprocal-rank-fusion implementation. Current results: **Recall@3 1.00, MRR 0.80 (5 cases)**. This small fixture checks fusion behavior only; it is not a production relevance evaluation and makes no provider calls.
 
 ### Manual verification
 

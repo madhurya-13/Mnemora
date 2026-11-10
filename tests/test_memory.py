@@ -14,7 +14,7 @@ from app.api import chat as chat_api
 from app.config import settings
 from app.memory import embeddings, extractor, service, vector_store, workflow
 from app.memory import retriever
-from app.models.memory import Memory, MemoryExtractionJob, MemoryVectorOutbox
+from app.models.memory import Memory, MemoryConflict, MemoryExtractionJob, MemoryVectorOutbox
 from app.models.user import User
 from app.main import app
 from app.schemas.chat import ChatResponse
@@ -112,6 +112,40 @@ def test_sensitive_memory_content_is_rejected(temporary_database):
     assert request("GET", "/api/v1/memories").json()["total"] == 0
 
 
+def test_preference_conflict_requires_resolution_and_records_history(temporary_database, monkeypatch):
+    monkeypatch.setattr(service, "_semantic_duplicate", lambda *_args, **_kwargs: asyncio.sleep(0, result=(None, None)))
+    async def skip_vectors(_factory):
+        return 0
+    monkeypatch.setattr(service, "process_vector_outbox", skip_vectors)
+    request("GET", "/api/v1/memories")  # Establish the authenticated guest identity.
+    with temporary_database["factory"]() as db:
+        user = db.scalar(select(User))
+        existing = Memory(
+            user_id=user.user_id, content="User prefers Java", category="preferences",
+            importance=0.8, confidence=0.95, memory_type="stable", source="user",
+            approval_status="approved", vector_sync_status="synced",
+        )
+        db.add(existing)
+        db.commit()
+        existing_id = str(existing.memory_id)
+    candidate = request("POST", "/api/v1/memories", json={
+        "content": "User now prefers Python", "category": "preferences",
+        "importance": 0.9, "confidence": 0.95, "memory_type": "stable", "explicit": True,
+    })
+    assert candidate.status_code == 201
+    candidate_id = candidate.json()["memory_id"]
+    with temporary_database["factory"]() as db:
+        conflict_id = str(db.scalar(select(MemoryConflict.conflict_id).where(MemoryConflict.new_memory_id == UUID(candidate_id))))
+    assert request("POST", f"/api/v1/memories/{candidate_id}/approve").status_code == 409
+    page = request("GET", "/api/v1/memories/conflicts").json()
+    assert page["total"] == 1 and page["items"][0]["existing_memory"]["memory_id"] == existing_id
+    resolved = request("POST", f"/api/v1/memories/conflicts/{conflict_id}/resolve", json={"resolution": "accept_update"})
+    assert resolved.status_code == 200 and resolved.json()["status"] == "resolved_updated"
+    assert resolved.json()["existing_memory"]["content"] == "User now prefers Python"
+    history = request("GET", f"/api/v1/memories/{existing_id}/history")
+    assert history.status_code == 200 and history.json()[0]["content"] == "User prefers Java"
+
+
 def test_pending_memories_are_never_retrieved_for_chat(temporary_database, monkeypatch: pytest.MonkeyPatch):
     pending = request("POST", "/api/v1/memories", json={
         "content": "User is learning Spanish.", "category": "education",
@@ -138,7 +172,11 @@ def test_approved_memory_search_is_semantic_persistent_and_user_filtered(
     async def embed(_text: str):
         return [1.0, 0.0, 0.0]
 
+    async def embed_many(texts: list[str], **_kwargs):
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
     monkeypatch.setattr(embeddings, "embed_text", embed)
+    monkeypatch.setattr(embeddings, "embed_texts", embed_many)
 
     def upsert(memory, _vector, path=None):
         indexed[str(memory.memory_id)] = {"user_id": str(memory.user_id), "document": memory.content, "category": memory.category}

@@ -12,22 +12,32 @@ from app.memory import retriever, service, workflow
 from app.memory.embeddings import EmbeddingConfigurationError, EmbeddingServiceError
 from app.memory.service import MemoryConflictError, MemoryNotFoundError, MemoryUnsafeContentError
 from app.models.conversation import Conversation
-from app.models.memory import Memory, MemoryExtractionJob, MemoryVectorOutbox
+from app.models.memory import Memory, MemoryConflict, MemoryExtractionJob, MemoryVectorOutbox
 from app.models.message import Message
 from app.models.user import User
 from app.schemas.memory import (
     ApprovalStatus,
     MemoryCategory,
     MemoryCreateRequest,
+    MemoryConflictPage,
+    MemoryConflictResolveRequest,
+    MemoryConflictResponse,
+    MemoryHistoryResponse,
     MemoryPage,
     MemoryResponse,
+    MemoryRetrieveItem,
+    MemoryRetrieveRequest,
+    MemoryRetrieveResponse,
     MemorySearchRequest,
     MemorySearchResponse,
     MemorySearchResult,
     MemoryStats,
     MemoryUpdateRequest,
+    QueryAnalysisResponse,
+    RetrievalStatsResponse,
 )
 from app.services.session_service import get_current_user
+from app.retrieval import hybrid_retriever, query_analyzer
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
 
@@ -64,6 +74,23 @@ def _validate_sources(db: Session, user_id: UUID, payload: MemoryCreateRequest) 
         ).all()
         if len(set(found)) != len(set(payload.source_message_ids)):
             raise HTTPException(status_code=404, detail="One or more source messages were not found.")
+
+
+def _conflict_response(db: Session, conflict: MemoryConflict, user_id: UUID) -> MemoryConflictResponse | None:
+    existing = db.scalar(select(Memory).where(
+        Memory.memory_id == conflict.existing_memory_id, Memory.user_id == user_id,
+    ))
+    candidate = db.scalar(select(Memory).where(
+        Memory.memory_id == conflict.new_memory_id, Memory.user_id == user_id,
+    ))
+    if existing is None or candidate is None:
+        return None
+    return MemoryConflictResponse(
+        conflict_id=conflict.conflict_id, conflict_type=conflict.conflict_type,
+        status=conflict.status, summary=conflict.summary, resolution=conflict.resolution,
+        created_at=conflict.created_at, resolved_at=conflict.resolved_at,
+        existing_memory=existing, new_memory=candidate,
+    )
 
 
 @router.post("", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
@@ -121,13 +148,111 @@ async def search_memories(
 ) -> MemorySearchResponse:
     try:
         results = await retriever.search_memories(
-            db, user.user_id, payload.query, top_k=payload.top_k, category=payload.category
+            db, user.user_id, payload.query, top_k=payload.top_k, category=payload.category,
+            min_importance=payload.min_importance, date_from=payload.date_from,
+            date_to=payload.date_to, sort_by=payload.sort_by,
         )
     except (EmbeddingConfigurationError, EmbeddingServiceError) as error:
         raise _safe_embedding_error(error) from error
     except Exception as error:
         raise HTTPException(status_code=503, detail="Semantic memory search is temporarily unavailable.") from error
     return MemorySearchResponse(query=payload.query, results=results)
+
+
+@router.post("/analyze-query", response_model=QueryAnalysisResponse)
+def analyze_memory_query(
+    payload: MemorySearchRequest,
+    user: User = Depends(get_current_user),
+) -> QueryAnalysisResponse:
+    del user  # Authentication is required; analysis itself uses no account data.
+    return query_analyzer.analyze_query(payload.query)
+
+
+@router.post("/retrieve", response_model=MemoryRetrieveResponse)
+async def retrieve_memories(
+    payload: MemoryRetrieveRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> MemoryRetrieveResponse:
+    try:
+        result = await hybrid_retriever.retrieve(db, user.user_id, payload.query, top_k=payload.top_k)
+    except (EmbeddingConfigurationError, EmbeddingServiceError) as error:
+        raise _safe_embedding_error(error) from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Memory retrieval is temporarily unavailable.") from error
+    selected = [MemoryRetrieveItem(
+        memory=row["memory"], rank=rank, retrieval_reason=row["retrieval_reason"],
+        semantic_score=row["semantic_score"], keyword_score=row["keyword_score"],
+        importance_score=row["components"]["importance"], confidence_score=row["components"]["confidence"],
+        recency_score=row["components"]["recency"], category_score=row["components"]["category"],
+        usage_score=row["components"]["usage"], final_score=row["final_score"],
+    ) for rank, row in enumerate(result.context["selected"], 1)]
+    return MemoryRetrieveResponse(
+        query=payload.query, analysis=result.analysis, selected=selected,
+        candidate_count=result.candidate_count,
+        excluded_count=max(0, result.candidate_count - len(selected)), latency_ms=result.latency_ms,
+    )
+
+
+@router.get("/conflicts", response_model=MemoryConflictPage)
+def get_memory_conflicts(
+    status_filter: str = Query(default="unresolved", alias="status", pattern="^(unresolved|resolved_kept|resolved_updated|all)$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> MemoryConflictPage:
+    predicates = [MemoryConflict.user_id == user.user_id]
+    if status_filter != "all":
+        predicates.append(MemoryConflict.status == status_filter)
+    conflicts = db.scalars(select(MemoryConflict).where(*predicates).order_by(MemoryConflict.created_at.desc())).all()
+    items = [response for conflict in conflicts if (response := _conflict_response(db, conflict, user.user_id)) is not None]
+    return MemoryConflictPage(items=items, total=len(items))
+
+
+@router.post("/conflicts/{conflict_id}/resolve", response_model=MemoryConflictResponse)
+async def resolve_memory_conflict(
+    conflict_id: UUID,
+    payload: MemoryConflictResolveRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> MemoryConflictResponse:
+    try:
+        conflict, _ = service.resolve_conflict(
+            db, user.user_id, conflict_id, resolution=payload.resolution,
+            edited_content=payload.edited_content,
+        )
+        if payload.resolution in {"accept_update", "edit"}:
+            await service.process_vector_outbox(_factory(db))
+            db.refresh(conflict)
+        response = _conflict_response(db, conflict, user.user_id)
+        if response is None:
+            raise _not_found()
+        return response
+    except MemoryNotFoundError as error:
+        raise _not_found() from error
+    except MemoryConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except MemoryUnsafeContentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get("/retrieval-stats", response_model=RetrievalStatsResponse)
+def get_retrieval_stats(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RetrievalStatsResponse:
+    return RetrievalStatsResponse(**service.retrieval_stats(db, user.user_id))
+
+
+@router.get("/{memory_id}/history", response_model=list[MemoryHistoryResponse])
+def get_memory_history(
+    memory_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[MemoryHistoryResponse]:
+    try:
+        return service.memory_history(db, user.user_id, memory_id)
+    except MemoryNotFoundError as error:
+        raise _not_found() from error
 
 
 @router.post("/extractions/retry", status_code=status.HTTP_202_ACCEPTED)

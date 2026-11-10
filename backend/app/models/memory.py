@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -87,3 +87,78 @@ class MemoryExtractionJob(Base):
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
+
+
+class MemoryHistory(Base):
+    __tablename__ = "memory_history"
+    __table_args__ = (Index("ix_memory_history_owner_created", "user_id", "memory_id", "created_at"),)
+
+    history_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("memories.memory_id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    importance: Mapped[float] = mapped_column(nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False)
+    memory_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    approval_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    change_reason: Mapped[str] = mapped_column(String(80), nullable=False, default="user_update")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class MemoryConflict(Base):
+    __tablename__ = "memory_conflicts"
+    __table_args__ = (
+        CheckConstraint("status IN ('unresolved', 'resolved_kept', 'resolved_updated')", name="ck_memory_conflict_status"),
+        Index("ix_memory_conflicts_owner_status", "user_id", "status", "created_at"),
+    )
+
+    conflict_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    existing_memory_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("memories.memory_id", ondelete="CASCADE"), nullable=False)
+    new_memory_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("memories.memory_id", ondelete="CASCADE"), nullable=False)
+    conflict_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="unresolved")
+    summary: Mapped[str] = mapped_column(String(240), nullable=False)
+    resolution: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc))
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class MemoryRetrievalEvent(Base):
+    __tablename__ = "memory_retrieval_events"
+    __table_args__ = (Index("ix_memory_retrieval_owner_created", "user_id", "created_at"),)
+
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    intent: Mapped[str] = mapped_column(String(60), nullable=False)
+    query_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    selected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    excluded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class MemoryRetrievalItem(Base):
+    __tablename__ = "memory_retrieval_items"
+    __table_args__ = (
+        UniqueConstraint("event_id", "memory_id", name="uq_memory_retrieval_item"),
+        Index("ix_memory_retrieval_item_memory", "memory_id", "selected"),
+    )
+
+    item_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("memory_retrieval_events.event_id", ondelete="CASCADE"), nullable=False)
+    memory_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("memories.memory_id", ondelete="CASCADE"), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str] = mapped_column(String(240), nullable=False)
+    semantic_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    keyword_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    importance_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    recency_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    category_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    usage_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    final_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)

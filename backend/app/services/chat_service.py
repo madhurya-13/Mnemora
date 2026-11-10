@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -70,6 +71,16 @@ def prepare_turn(
             status="pending",
         )
         now = datetime.now(timezone.utc)
+        previous_timestamp = db.scalar(
+            select(Message.created_at)
+            .where(Message.conversation_id == conversation.conversation_id, Message.message_id != user_message.message_id)
+            .order_by(Message.created_at.desc(), Message.message_id.desc())
+            .limit(1)
+        )
+        if previous_timestamp is not None:
+            if previous_timestamp.tzinfo is None:
+                previous_timestamp = previous_timestamp.replace(tzinfo=timezone.utc)
+            user_message.created_at = max(now, previous_timestamp + timedelta(microseconds=1))
         conversations.update_last_message_at(conversation, now)
         db.commit()
         return PreparedTurn(

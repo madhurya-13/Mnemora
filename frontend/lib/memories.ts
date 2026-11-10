@@ -34,8 +34,10 @@ export type MemoryStats = {
   categories: Record<string, number>;
   recently_updated: Memory[];
 };
-export type MemorySearchResult = { memory: Memory; similarity: number; relevance: number };
+export type MemorySearchResult = { memory: Memory; similarity: number; relevance: number; keyword_score: number; recency_score: number; retrieval_reason: string; score_components: Record<string, number> };
 export type MemorySearchResponse = { query: string; results: MemorySearchResult[] };
+export type MemoryConflict = { conflict_id: string; conflict_type: string; status: string; summary: string; resolution: string | null; created_at: string; resolved_at: string | null; existing_memory: Memory; new_memory: Memory };
+export type RetrievalStats = { retrieval_count: number; selected_count: number; excluded_count: number; average_latency_ms: number; recently_retrieved: Memory[]; recently_accessed: Memory[]; high_importance: Memory[]; category_distribution: Record<string, number>; recent_events: { event_id: string; intent: string; query_type: string; category: string | null; candidate_count: number; selected_count: number; excluded_count: number; latency_ms: number; created_at: string }[] };
 
 export const listMemories = (params: { limit?: number; offset?: number; category?: string; approval_status?: string } = {}) => {
   const query = new URLSearchParams({ limit: String(params.limit ?? 50), offset: String(params.offset ?? 0), sort_by: "updated_at", sort_order: "desc" });
@@ -53,6 +55,10 @@ export const updateMemory = (id: string, input: Partial<Pick<Memory, "content" |
 export const approveMemory = (id: string) => requestJson<Memory>(`/api/v1/memories/${encodeURIComponent(id)}/approve`, { method: "POST" });
 export const rejectMemory = (id: string) => requestJson<Memory>(`/api/v1/memories/${encodeURIComponent(id)}/reject`, { method: "POST" });
 export const deleteMemory = (id: string) => requestJson<{ deleted: boolean; vector_cleanup_pending: boolean }>(`/api/v1/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const searchMemories = (query: string) => requestJson<MemorySearchResponse>("/api/v1/memories/search", {
-  method: "POST", body: JSON.stringify({ query, top_k: 5 }),
+export const searchMemories = (query: string, filters: { category?: string; min_importance?: number; date_from?: string; date_to?: string; sort_by?: string } = {}) => requestJson<MemorySearchResponse>("/api/v1/memories/search", {
+  method: "POST", body: JSON.stringify({ query, top_k: 5, ...filters }),
 });
+export const getMemoryConflicts = () => requestJson<{ items: MemoryConflict[]; total: number }>("/api/v1/memories/conflicts");
+export const resolveMemoryConflict = (id: string, resolution: "keep_existing" | "accept_update") => requestJson<MemoryConflict>(`/api/v1/memories/conflicts/${encodeURIComponent(id)}/resolve`, { method: "POST", body: JSON.stringify({ resolution }) });
+export const getRetrievalStats = () => requestJson<RetrievalStats>("/api/v1/memories/retrieval-stats");
+export const getMemoryHistory = (id: string) => requestJson<{ history_id: string; content: string; change_reason: string; created_at: string }[]>(`/api/v1/memories/${encodeURIComponent(id)}/history`);
