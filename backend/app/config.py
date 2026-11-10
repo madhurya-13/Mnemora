@@ -1,6 +1,7 @@
 """Application settings loaded from environment variables or a local .env."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,21 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = False
     redis_url: str = "redis://localhost:6379"
     chroma_db_path: str = "./chroma_db"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    openai_embedding_model: str = "text-embedding-3-small"
+    memory_embedding_provider: Literal["openai", "google"] = "openai"
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_embedding_dimensions: int = Field(default=768, ge=128, le=3072)
+    memory_auto_save: bool = False
+    memory_top_k: int = Field(default=5, ge=1, le=20)
+    memory_similarity_threshold: float = Field(default=0.85, ge=0, le=1)
+    memory_min_importance: float = Field(default=0.5, ge=0, le=1)
+    memory_min_relevance: float = Field(default=0.25, ge=0, le=1)
+    memory_min_confidence: float = Field(default=0.5, ge=0, le=1)
+    memory_max_context_items: int = Field(default=5, ge=1, le=20)
+    memory_extraction_max_attempts: int = Field(default=5, ge=1, le=20)
+    memory_temporary_ttl_days: int = Field(default=30, ge=1, le=3650)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

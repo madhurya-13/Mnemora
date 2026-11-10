@@ -1,1 +1,1 @@
-"""Future short-term and long-term memory modules."""
+"""Long-term memory extraction, embedding, vector index and retrieval services."""

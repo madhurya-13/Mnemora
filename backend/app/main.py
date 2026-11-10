@@ -1,5 +1,8 @@
 """FastAPI entry point for MNEMORA."""
 
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,13 +17,29 @@ from fastapi.responses import JSONResponse
 from app.api.chat import router as chat_router
 from app.api.conversations import legacy_router as legacy_conversations_router
 from app.api.conversations import router as conversations_router
+from app.api.memories import router as memories_router
 from app.config import settings
 from app.database.db import get_db
+from app.memory.workflow import retry_worker
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    worker = asyncio.create_task(retry_worker())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(
     title=settings.application_name,
     version=settings.application_version,
     description="A foundation for a personal AI assistant with long-term memory.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -34,6 +53,7 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(legacy_conversations_router)
+app.include_router(memories_router)
 
 
 @app.exception_handler(RequestValidationError)

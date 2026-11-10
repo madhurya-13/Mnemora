@@ -8,14 +8,17 @@ import logging
 from collections.abc import AsyncIterator
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.assistant import respond, stream_response
 from app.config import settings
 from app.database.db import get_db
 from app.models.user import User
+from app.memory.retriever import retrieve_context
+from app.memory.workflow import process_pending_jobs
 from app.schemas.chat import ChatHealthResponse, ChatRequest, ChatResponse
 from app.services import chat_service
 from app.services.conversation_service import ConversationNotFoundError
@@ -88,14 +91,23 @@ def _mark_failed(factory: sessionmaker, user_id: UUID, conversation_id: UUID, us
 @router.post("", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ChatResponse:
     prepared = _prepare(payload, db, user)
     try:
-        result = await respond(str(prepared.conversation_id), payload.message, prepared.history)
+        memory_context = await retrieve_context(db, user.user_id, payload.message)
+        if memory_context:
+            result = await respond(str(prepared.conversation_id), payload.message, prepared.history, memory_context)
+        else:
+            result = await respond(str(prepared.conversation_id), payload.message, prepared.history)
         chat_service.complete_turn(
             db, user.user_id, prepared.conversation_id, prepared.user_message_id, result.response
+        )
+        background_tasks.add_task(
+            process_pending_jobs,
+            sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False, expire_on_commit=False),
         )
         return ChatResponse(conversation_id=prepared.conversation_id, response=result.response)
     except Exception as error:
@@ -119,6 +131,7 @@ async def chat_stream(
     user_id = user.user_id
     conversation_id = prepared.conversation_id
     user_message_id = prepared.user_message_id
+    memory_context = await retrieve_context(db, user_id, payload.message)
     session_factory = sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False, expire_on_commit=False)
     # Do not hold a database connection while the remote model streams.
     db.close()
@@ -127,7 +140,11 @@ async def chat_stream(
         yield _sse("conversation", {"conversation_id": str(conversation_id)})
         parts: list[str] = []
         try:
-            async for token in stream_response(prepared.history, payload.message):
+            if memory_context:
+                token_stream = stream_response(prepared.history, payload.message, memory_context)
+            else:
+                token_stream = stream_response(prepared.history, payload.message)
+            async for token in token_stream:
                 parts.append(token)
                 yield _sse("token", {"text": token})
             response_text = "".join(parts).strip()
@@ -154,4 +171,5 @@ async def chat_stream(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        background=BackgroundTask(process_pending_jobs, session_factory),
     )

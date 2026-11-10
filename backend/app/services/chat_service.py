@@ -1,13 +1,14 @@
 """Persistent chat turn orchestration, isolated from HTTP route definitions."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.message import Message
+from app.models.memory import MemoryExtractionJob
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
 from app.schemas.chat import ChatMessage
@@ -100,7 +101,18 @@ def complete_turn(
             raise RuntimeError("The chat turn is no longer pending.")
         messages.update_message_status(user_message_id, "completed")
         assistant = messages.save_message(conversation_id, "assistant", response_text, status="completed")
+        assistant.created_at = max(
+            datetime.now(timezone.utc),
+            user_message.created_at + timedelta(microseconds=1),
+        )
         conversations.update_last_message_at(conversation, datetime.now(timezone.utc))
+        db.add(MemoryExtractionJob(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant.message_id,
+            status="pending",
+        ))
         db.commit()
         return assistant
     except Exception:
