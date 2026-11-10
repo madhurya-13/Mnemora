@@ -28,6 +28,7 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
       ...init,
       headers,
       cache: "no-store",
+      credentials: "include",
     });
   } catch {
     throw new ApiError("Can’t reach MNEMORA’s backend. Check that it is running and try again.", 0);

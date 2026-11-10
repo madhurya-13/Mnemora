@@ -9,6 +9,7 @@ import TypingIndicator from "@/components/TypingIndicator";
 import WelcomeScreen from "@/components/WelcomeScreen";
 import { ApiError, getChatHealth, getHealth, type ChatHealthResponse } from "@/lib/api";
 import {
+  archiveConversation,
   clearConversation,
   createConversation,
   deleteConversation,
@@ -20,12 +21,14 @@ import {
   type ConversationSummary,
 } from "@/lib/chat";
 
-type ConnectionState = "checking" | "connected" | "disconnected";
+const ACTIVE_CONVERSATION_KEY = "mnemora.activeConversationId";
+
+type ConnectionState = "checking" | "connected" | "database-error" | "disconnected";
 type SendOptions = { includeUser?: boolean; regenerate?: boolean; replaceMessageId?: string };
 
 function toDisplayMessages(conversation: ConversationDetail): DisplayMessage[] {
   return conversation.messages.map((message, index) => ({
-    id: `${conversation.conversation_id}-${index}-${message.created_at}`,
+    id: message.message_id || `${conversation.conversation_id}-${index}-${message.created_at}`,
     role: message.role,
     content: message.content,
     createdAt: message.created_at,
@@ -49,40 +52,94 @@ export default function ChatApp() {
   const [chatHealth, setChatHealth] = useState<ChatHealthResponse | null>(null);
   const [sending, setSending] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(true);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const activeIdRef = useRef<string | null>(null);
+  const restoredOnceRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const changeActiveId = useCallback((id: string | null) => {
     activeIdRef.current = id;
     setActiveId(id);
+    if (typeof window !== "undefined") {
+      if (id) window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+      else window.localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+    }
   }, []);
 
   const refreshConversations = useCallback(async () => {
-    const list = await listConversations();
-    setConversations(list);
-    return list;
-  }, []);
+    const page = await listConversations(showArchived, 50, 0);
+    setConversations(page.items);
+    setHasMoreConversations(page.offset + page.items.length < page.total);
+    return page.items;
+  }, [showArchived]);
 
   useEffect(() => {
     let mounted = true;
-    getHealth().then(() => { if (mounted) setConnection("connected"); }).catch(() => { if (mounted) setConnection("disconnected"); });
+    getHealth().then(() => { if (mounted) setConnection("connected"); }).catch((error: unknown) => {
+      if (mounted) setConnection(error instanceof ApiError && error.status === 503 ? "database-error" : "disconnected");
+    });
     getChatHealth().then((result) => { if (mounted) setChatHealth(result); }).catch(() => { if (mounted) setChatHealth(null); });
-    listConversations().then(async (list) => {
-      if (!mounted) return;
-      setConversations(list);
-      if (list.length) {
-        const first = await getConversation(list[0].conversation_id);
+    setLoadingConversations(true);
+    const load = async () => {
+      try {
+        const page = await listConversations(showArchived, 50, 0);
+        if (!mounted) return;
+        setConversations(page.items);
+        setHasMoreConversations(page.offset + page.items.length < page.total);
+        if (!restoredOnceRef.current) {
+          const savedId = window.localStorage.getItem(ACTIVE_CONVERSATION_KEY);
+          const savedConversation = page.items.find((item) => item.conversation_id === savedId);
+          const candidates = savedConversation
+            ? [savedConversation, ...page.items.filter((item) => item.conversation_id !== savedId)]
+            : page.items;
+          const staleIds: string[] = [];
+          let restored = false;
+          for (const candidate of candidates) {
+            setLoadingConversation(true);
+            try {
+              const detail = await getConversation(candidate.conversation_id);
+              if (mounted) {
+                changeActiveId(detail.conversation_id);
+                setMessages(toDisplayMessages(detail));
+              }
+              restored = true;
+              break;
+            } catch (error) {
+              if (error instanceof ApiError && error.status === 404) {
+                staleIds.push(candidate.conversation_id);
+                continue;
+              }
+              throw error;
+            }
+          }
+          if (staleIds.length && mounted) {
+            setConversations((current) => current.filter((item) => !staleIds.includes(item.conversation_id)));
+            setHasMoreConversations(page.offset + page.items.length - staleIds.length < page.total);
+          }
+          if (!restored) {
+            changeActiveId(null);
+            setMessages([]);
+          }
+          restoredOnceRef.current = true;
+        }
+      } catch (error) {
+        if (mounted) setPageError(safeError(error));
+      } finally {
         if (mounted) {
-          changeActiveId(first.conversation_id);
-          setMessages(toDisplayMessages(first));
+          setLoadingConversations(false);
+          setLoadingConversation(false);
         }
       }
-    }).catch((error: unknown) => { if (mounted) setPageError(safeError(error)); });
+    };
+    void load();
     return () => { mounted = false; };
-  }, [changeActiveId]);
+  }, [changeActiveId, showArchived]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto", block: "end" });
@@ -105,7 +162,9 @@ export default function ChatApp() {
 
   const startConversation = useCallback(async () => {
     setPageError(null);
+    setNotice(null);
     try {
+      setShowArchived(false);
       const created = await createConversation();
       setConversations((current) => [created, ...current]);
       changeActiveId(created.conversation_id);
@@ -206,6 +265,7 @@ export default function ChatApp() {
     try {
       await renameConversation(id, title);
       await refreshConversations();
+      setNotice("Conversation renamed.");
     } catch (error) { setPageError(safeError(error)); }
   }
 
@@ -225,16 +285,39 @@ export default function ChatApp() {
     } catch (error) { setPageError(safeError(error)); }
   }
 
+  async function archive(id: string, archived: boolean) {
+    try {
+      await archiveConversation(id, archived);
+      if (activeIdRef.current === id && archived) {
+        changeActiveId(null);
+        setMessages([]);
+      }
+      await refreshConversations();
+      setNotice(archived ? "Conversation archived." : "Conversation restored.");
+    } catch (error) { setPageError(safeError(error)); }
+  }
+
+  async function loadMoreConversations() {
+    try {
+      const page = await listConversations(showArchived, 50, conversations.length);
+      setConversations((current) => [...current, ...page.items]);
+      setHasMoreConversations(page.offset + page.items.length < page.total);
+    } catch (error) { setPageError(safeError(error)); }
+  }
+
   function retry(prompt: string, regenerate: boolean, messageId: string) {
     void submitMessage(prompt, { includeUser: false, regenerate, replaceMessageId: messageId });
   }
 
   const activeConversation = conversations.find((item) => item.conversation_id === activeId) ?? null;
-  const connectionText = connection === "checking" ? "Checking backend" : connection === "connected" ? "Backend connected" : "Backend unavailable";
+  const connectionText = connection === "checking" ? "Checking backend" : connection === "connected" ? "Database connected" : connection === "database-error" ? "Database unavailable" : "Backend unavailable";
 
   return <div className="flex h-dvh min-h-[520px] overflow-hidden bg-[#080a12] text-slate-100">
     <ChatSidebar
       conversations={conversations}
+      loading={loadingConversations}
+      hasMore={hasMoreConversations}
+      showArchived={showArchived}
       activeId={activeId}
       mobileOpen={mobileSidebarOpen}
       onCloseMobile={() => setMobileSidebarOpen(false)}
@@ -243,6 +326,9 @@ export default function ChatApp() {
       onRename={(id, title) => void rename(id, title)}
       onClear={(id) => void clear(id)}
       onDelete={(id) => void remove(id)}
+      onArchive={(id, archived) => void archive(id, archived)}
+      onLoadMore={() => void loadMoreConversations()}
+      onToggleArchived={() => { setLoadingConversations(true); setShowArchived((value) => !value); }}
       onToggleInfo={() => setInfoOpen((value) => !value)}
     />
 
@@ -254,13 +340,14 @@ export default function ChatApp() {
             <div className="min-w-0"><p className="truncate text-sm font-medium text-slate-200">{activeConversation?.title ?? "New conversation"}</p><p className="mt-0.5 text-[10px] text-slate-600">Personal AI workspace</p></div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
-            <span className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] sm:flex ${connection === "connected" ? "border-emerald-300/10 bg-emerald-300/[0.045] text-emerald-200/80" : connection === "disconnected" ? "border-rose-300/10 bg-rose-300/[0.045] text-rose-200/80" : "border-white/[0.08] text-slate-500"}`}><span className={`h-1.5 w-1.5 rounded-full ${connection === "connected" ? "bg-emerald-400" : connection === "disconnected" ? "bg-rose-400" : "animate-pulse bg-violet-300"}`} />{connectionText}</span>
+            <span className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] sm:flex ${connection === "connected" ? "border-emerald-300/10 bg-emerald-300/[0.045] text-emerald-200/80" : connection === "database-error" || connection === "disconnected" ? "border-rose-300/10 bg-rose-300/[0.045] text-rose-200/80" : "border-white/[0.08] text-slate-500"}`}><span className={`h-1.5 w-1.5 rounded-full ${connection === "connected" ? "bg-emerald-400" : connection === "database-error" || connection === "disconnected" ? "bg-rose-400" : "animate-pulse bg-violet-300"}`} />{connectionText}</span>
             <span className="hidden rounded-full border border-violet-300/10 bg-violet-300/[0.04] px-3 py-1.5 text-[11px] text-violet-200/70 md:inline-flex"><Sparkles size={12} className="mr-1.5" />{chatHealth?.model ?? "MNEMORA"}</span>
             <button aria-label={infoOpen ? "Hide assistant information" : "Show assistant information"} onClick={() => setInfoOpen((value) => !value)} className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"><Info size={17} /></button>
           </div>
         </header>
 
         {pageError && <div className="mx-4 mt-4 flex items-start gap-2 rounded-xl border border-rose-300/15 bg-rose-300/[0.06] px-4 py-3 text-sm text-rose-100 sm:mx-6"><AlertTriangle size={16} className="mt-0.5 shrink-0" /><span className="flex-1">{pageError}</span><button onClick={() => setPageError(null)} aria-label="Dismiss error" className="text-rose-200/70 hover:text-rose-100"><ChevronDown size={16} /></button></div>}
+        {notice && <div role="status" className="mx-4 mt-3 rounded-xl border border-emerald-300/10 bg-emerald-300/[0.04] px-4 py-2 text-xs text-emerald-100/80 sm:mx-6">{notice}</div>}
         {connection === "connected" && chatHealth && !chatHealth.configured && <div className="mx-4 mt-4 flex items-start gap-2 rounded-xl border border-amber-300/15 bg-amber-300/[0.055] px-4 py-3 text-xs leading-5 text-amber-100/90 sm:mx-6"><AlertTriangle size={15} className="mt-0.5 shrink-0" /><span>Chat is not configured yet. Add <code className="rounded bg-black/20 px-1">GOOGLE_API_KEY</code> to <code className="rounded bg-black/20 px-1">backend/.env</code>, then restart the backend.</span></div>}
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" aria-live="polite">
@@ -284,7 +371,7 @@ export default function ChatApp() {
           <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><p className="text-[10px] uppercase tracking-[0.16em] text-slate-600">Model</p><p className="mt-2 text-sm text-slate-200">{chatHealth?.model ?? "Loading…"}</p><p className="mt-1 text-[11px] text-slate-500">Configured in backend environment</p></div>
           <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><p className="text-[10px] uppercase tracking-[0.16em] text-slate-600">Connection</p><p className={`mt-2 text-sm ${connection === "connected" ? "text-emerald-200" : connection === "disconnected" ? "text-rose-200" : "text-slate-300"}`}>{connectionText}</p><p className="mt-1 text-[11px] text-slate-500">{chatHealth?.configured ? "Chat service configured" : "Chat service not configured"}</p></div>
           <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><p className="text-[10px] uppercase tracking-[0.16em] text-slate-600">This conversation</p><p className="mt-2 truncate text-sm text-slate-200">{activeConversation?.title ?? "No conversation selected"}</p><p className="mt-1 text-[11px] text-slate-500">{activeConversation ? `${activeConversation.message_count} messages` : "Start a new chat to begin"}</p></div>
-          <p className="text-[11px] leading-5 text-slate-600">Conversation history is held in backend memory for this running session. It clears when the backend restarts.</p>
+          <p className="text-[11px] leading-5 text-slate-600">Conversation history is saved locally and restored when you return. Your guest session is held in a secure HttpOnly cookie.</p>
         </div>
         </aside>
       </>}

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     chat_max_history_messages: int = Field(default=20, ge=0, le=100)
     chat_max_message_length: int = Field(default=8000, ge=1, le=50000)
     database_url: str = "sqlite:///./memory_agent.db"
+    guest_session_cookie: str = "mnemora_session"
+    guest_session_max_age_seconds: int = Field(default=31536000, ge=86400, le=63072000)
+    session_cookie_secure: bool = False
     redis_url: str = "redis://localhost:6379"
     chroma_db_path: str = "./chroma_db"
 

@@ -1,29 +1,61 @@
 import { ApiError, getApiUrl, requestJson } from "@/lib/api";
 
-export type MessageRole = "user" | "assistant";
-export type ChatMessage = { role: MessageRole; content: string; created_at: string };
-export type ChatRequest = { conversation_id: string; message: string; regenerate?: boolean };
+export type MessageRole = "user" | "assistant" | "system";
+export type ChatMessage = {
+  message_id: string;
+  role: MessageRole;
+  content: string;
+  created_at: string;
+  token_count: number | null;
+  status: "pending" | "completed" | "failed";
+};
+export type ChatRequest = { conversation_id: string | null; message: string; regenerate?: boolean };
 export type ChatResponse = { conversation_id: string; response: string; role: "assistant" };
-export type ConversationSummary = { conversation_id: string; title: string; updated_at: string; message_count: number };
+export type ConversationSummary = {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  last_message_at: string | null;
+  is_archived: boolean;
+  message_count: number;
+};
 export type ConversationDetail = ConversationSummary & { messages: ChatMessage[] };
+export type ConversationPage = { items: ConversationSummary[]; total: number; limit: number; offset: number };
+export type MessagePage = { items: ChatMessage[]; total: number; limit: number; offset: number };
 export type StreamEvent =
   | { event: "conversation"; data: { conversation_id: string } }
   | { event: "token"; data: { text: string } }
   | { event: "done"; data: { conversation_id: string; role: "assistant" } }
   | { event: "error"; data: { message: string; retryable: boolean } };
 
-export const listConversations = () => requestJson<ConversationSummary[]>("/api/v1/chat/conversations");
-export const createConversation = (title = "New chat") => requestJson<ConversationDetail>("/api/v1/chat/conversations", {
+export const listConversations = (archived = false, limit = 50, offset = 0) =>
+  requestJson<ConversationPage>(`/api/v1/conversations?archived=${archived}&limit=${limit}&offset=${offset}`);
+export const createConversation = (title = "New chat") => requestJson<ConversationDetail>("/api/v1/conversations", {
   method: "POST", body: JSON.stringify({ title }),
 });
-export const getConversation = (id: string) => requestJson<ConversationDetail>(`/api/v1/chat/conversations/${encodeURIComponent(id)}`);
-export const renameConversation = (id: string, title: string) => requestJson<ConversationSummary>(`/api/v1/chat/conversations/${encodeURIComponent(id)}`, {
+export async function getConversation(id: string): Promise<ConversationDetail> {
+  const conversation = await requestJson<ConversationDetail>(`/api/v1/conversations/${encodeURIComponent(id)}`);
+  const messages: ChatMessage[] = [];
+  while (messages.length < conversation.message_count) {
+    const page = await requestJson<MessagePage>(
+      `/api/v1/conversations/${encodeURIComponent(id)}/messages?limit=500&offset=${messages.length}`,
+    );
+    if (!page.items.length) break;
+    messages.push(...page.items);
+  }
+  return { ...conversation, messages };
+}
+export const renameConversation = (id: string, title: string) => requestJson<ConversationSummary>(`/api/v1/conversations/${encodeURIComponent(id)}`, {
   method: "PATCH", body: JSON.stringify({ title }),
+});
+export const archiveConversation = (id: string, is_archived: boolean) => requestJson<ConversationSummary>(`/api/v1/conversations/${encodeURIComponent(id)}`, {
+  method: "PATCH", body: JSON.stringify({ is_archived }),
 });
 export const clearConversation = (id: string) => requestJson<ConversationDetail>(`/api/v1/chat/conversations/${encodeURIComponent(id)}/messages`, {
   method: "DELETE",
 });
-export const deleteConversation = (id: string) => requestJson<void>(`/api/v1/chat/conversations/${encodeURIComponent(id)}`, {
+export const deleteConversation = (id: string) => requestJson<void>(`/api/v1/conversations/${encodeURIComponent(id)}`, {
   method: "DELETE",
 });
 
@@ -59,6 +91,7 @@ export async function streamChat(
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify(request),
       signal,
+      credentials: "include",
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;

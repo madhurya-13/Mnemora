@@ -1,15 +1,15 @@
 # MNEMORA — An AI That Remembers, Learns and Evolves
 
-MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold and health dashboard. Milestone 2 adds a streaming conversational assistant with temporary, per-conversation history. Persistent memory, voice and agent orchestration remain future work.
+MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold and health dashboard. Milestone 2 added a streaming conversational assistant. Milestone 3 adds durable, guest-owned conversation history with SQLite persistence and PostgreSQL-ready SQLAlchemy models. Long-term semantic memory, voice and agent orchestration remain future work.
 
 ## Objectives and planned capabilities
 
-The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. These are future milestones; this repository currently provides the foundation only.
+The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. This repository currently implements conversational AI and persistent short-term conversation history; the remaining capabilities are future milestones.
 
 ## Technology and architecture
 
 - **FastAPI, Uvicorn and Pydantic Settings** provide a typed Python API, local ASGI server and environment configuration.
-- **SQLAlchemy** prepares relational persistence; SQLite is the default and the URL can later target PostgreSQL.
+- **SQLAlchemy and Alembic** provide relational persistence and schema migrations; SQLite is the default and PostgreSQL is supported through `DATABASE_URL` and the psycopg driver.
 - **Google GenAI SDK** generates asynchronous Gemini chat responses and token streams.
 - **ChromaDB** is reserved for semantic long-term memory; **Redis** for short-lived state and caching.
 - **Next.js, React, TypeScript and Tailwind CSS** provide the responsive App Router dashboard. **Lucide React** supplies icons.
@@ -48,7 +48,7 @@ README.md
 
 Copy `backend/.env.example` to `backend/.env` and add your Google AI Studio API key locally to enable chat. Copy `frontend/.env.local.example` to `frontend/.env.local`; it contains only the public API base URL. Both real environment files are ignored by Git. Never put secrets in a `NEXT_PUBLIC_` variable because those values are included in browser code.
 
-The backend reads the Gemini key, model, generation, context-limit, database, Redis, ChromaDB and CORS settings from its `.env` or process environment. It starts without a key, but chat requests remain unavailable until one is configured. Redis and ChromaDB are not contacted in this milestone.
+The backend reads Gemini, generation, context-limit, database, guest-cookie, Redis, ChromaDB and CORS settings from its `.env` or process environment. It starts without a model key, but chat requests remain unavailable until one is configured. Redis and ChromaDB are not used in this milestone.
 
 ## Run on Windows in VS Code
 
@@ -63,6 +63,7 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 Copy-Item .env.example .env
+alembic upgrade head
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -77,7 +78,7 @@ npm install
 npm run dev
 ```
 
-Visit `http://localhost:3000`. The dashboard shows a loading state and then a green connected or red disconnected status based on the actual backend response. To verify separately, visit `http://localhost:8000/` and `http://localhost:8000/api/v1/health`. The latter returns `{"status":"healthy","application":"MNEMORA","version":"1.0.0"}`. The API documentation is at `http://localhost:8000/docs`.
+Visit `http://localhost:3000`. The dashboard shows backend/database availability and restores the last open conversation after refresh. To verify separately, visit `http://localhost:8000/`, `http://localhost:8000/api/v1/health` and `http://localhost:8000/docs`. Run `alembic upgrade head` from `backend` after pulling schema changes. Back up an existing database before applying a migration.
 
 ## API
 
@@ -85,8 +86,16 @@ Visit `http://localhost:3000`. The dashboard shows a loading state and then a gr
 |---|---|---|
 | GET | `/` | Application name, version and running message |
 | GET | `/api/v1/health` | Health status consumed by the dashboard |
+| GET | `/api/v1/conversations` | List the guest's active or archived conversations (paginated) |
+| POST | `/api/v1/conversations` | Create a conversation |
+| GET | `/api/v1/conversations/{id}` | Get conversation details and the first message page |
+| GET | `/api/v1/conversations/{id}/messages` | Retrieve chronological, paginated messages |
+| PATCH | `/api/v1/conversations/{id}` | Rename, archive or restore a conversation |
+| DELETE | `/api/v1/conversations/{id}` | Delete a conversation and its messages |
+| POST | `/api/v1/chat` | Generate and persist a complete response |
+| POST | `/api/v1/chat/stream` | Stream tokens; save assistant response only after completion |
 
-All future endpoints should be registered beneath `/api/v1` as routers are added.
+The legacy `/api/v1/chat/conversations` routes remain available for compatibility. A random guest token is held in an HttpOnly cookie; the database stores only its SHA-256 hash. Conversation reads and writes are scoped to that guest. The browser stores only the active conversation ID in local storage. Failed model requests retain the user message with `failed` status; partial assistant output is never persisted. Model context is limited by `CHAT_MAX_HISTORY_MESSAGES`.
 
 ## Tests
 
@@ -99,7 +108,7 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
 python -m pytest
 ```
 
-The tests cover root and health response JSON and the local frontend CORS preflight. The browser's live status is also an end-to-end connectivity check.
+The tests cover health/CORS, guest identity, ownership isolation, CRUD and archive flows, message pagination, persistence after an engine restart, context limits, and successful and failed stream persistence. Model calls are mocked and tests do not spend API quota.
 
 ## GitHub preparation
 
@@ -116,7 +125,7 @@ To initialize a repository in a fresh copy, run `git init` first. Add a remote o
 
 1. **Project setup and architecture** — complete.
 2. **Conversational AI Engine** — this milestone.
-3. **Short-term memory persistence** — replace process-local conversation state with durable storage.
+3. **Short-term memory persistence** — durable, guest-owned conversation history (complete).
 4. **Long-term memory** — extraction, semantic retrieval, and contradiction-aware updates.
 5. **Voice and knowledge views** — input/output and memory visualization.
 6. **Personalization and orchestration** — specialized agents and evolving user context.
@@ -157,23 +166,17 @@ CHAT_MAX_MESSAGE_LENGTH=8000
 
 Create a key in [Google AI Studio](https://aistudio.google.com/apikey). Gemini offers a free tier with limited model access and usage quotas; availability and limits can change. [Current Gemini API pricing and free-tier details](https://ai.google.dev/gemini-api/docs/pricing). Google states that free-tier submitted content may be used to improve its products, so avoid sending sensitive personal information on that tier. The system prompt is defined in `backend/app/utils/prompts.py` and can be overridden with `MNEMORA_SYSTEM_PROMPT`. Restart the backend after changing environment values. A missing key produces a clear configuration message; the application still starts normally.
 
-### Conversation context and limitations
+### Conversation persistence and limitations
 
-`InMemoryConversationStore` gives each conversation a unique ID and stores role-tagged user and assistant messages separately. The assistant receives at most `CHAT_MAX_HISTORY_MESSAGES` recent messages plus the current request. Conversations can be listed, opened, renamed, cleared, and deleted through the chat API.
+Conversations and messages are stored in SQLAlchemy tables and migrated with Alembic. SQLite is the default; set `DATABASE_URL` to a PostgreSQL SQLAlchemy URL to use PostgreSQL. Each browser receives an opaque guest session cookie, and all conversation operations enforce ownership in the backend. Conversations can be listed, opened, renamed, archived/restored, and deleted. The frontend fetches history from the API and restores the active conversation after refresh.
 
-This is process-local temporary state. Restarting the backend clears all conversations; running multiple backend workers would give each worker separate history. It is not long-term user memory, and no Redis or vector database is used in this milestone. A storage interface isolates the API and assistant from the in-memory implementation so a persistent store can replace it later.
+This is short-term conversational history, not long-term semantic memory. There are no user accounts or cross-device guest history, and Redis/ChromaDB are not used in this milestone. Do not delete the SQLite database if you want to keep its conversations. Before changing database schema in a later release, back up the database and apply Alembic migrations.
 
 ### Chat endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/chat/health` | Reports configured model and whether an API key is set; makes no model call |
-| POST | `/api/v1/chat/conversations` | Create a conversation |
-| GET | `/api/v1/chat/conversations` | List conversations |
-| GET | `/api/v1/chat/conversations/{id}` | Retrieve one conversation and its messages |
-| PATCH | `/api/v1/chat/conversations/{id}` | Rename a conversation |
-| DELETE | `/api/v1/chat/conversations/{id}/messages` | Clear its messages |
-| DELETE | `/api/v1/chat/conversations/{id}` | Delete it |
 | POST | `/api/v1/chat` | Generate one complete response |
 | POST | `/api/v1/chat/stream` | Stream a response as Server-Sent Events |
 
@@ -183,7 +186,7 @@ Example non-streaming request:
 {"conversation_id":"conv_example","message":"Explain how neural networks work"}
 ```
 
-The stream sends `conversation`, `token`, then `done` events. If generation fails it sends an `error` event with a safe message and retry guidance. Only a completed assistant turn is stored; a partial stream is not added to conversation history.
+The stream sends `conversation`, `token`, then `done` events. If generation fails it sends an `error` event with a safe message and retry guidance. The user message is committed before generation. The assistant message is committed only after a complete stream; if generation fails or is interrupted, the user message is marked failed and partial assistant text is not stored.
 
 ### Frontend integration
 
@@ -191,7 +194,7 @@ The stream sends `conversation`, `token`, then `done` events. If generation fail
 
 ### Run and test the chatbot
 
-Follow the Windows setup commands above. Set a real API key in `backend/.env`, start the backend and frontend, open `http://localhost:3000`, and send a suggested prompt or your own message. Try “My name is Alex” followed by “What is my name?” in one conversation, then ask the same question in a new conversation to confirm their histories are independent. Use the sidebar controls to rename, clear, switch, and delete conversations. Stop and restart the backend to confirm that temporary history resets.
+Follow the Windows setup commands above. Set a real API key in `backend/.env`, start the backend and frontend, open `http://localhost:3000`, and send a suggested prompt or your own message. Try “My name is Alex” followed by “What is my name?” in one conversation, then ask the same question in a new conversation to confirm their histories are independent. Use the sidebar controls to rename, archive, switch, restore, and delete conversations. Refresh the browser and restart the backend to confirm that history persists.
 
 Automated tests mock all model calls and require no Gemini API usage. From the repository root:
 
@@ -203,3 +206,17 @@ python -m pytest
 ```
 
 To inspect the health state without sending a prompt, open `http://localhost:8000/api/v1/chat/health`. No actual Gemini call is made by tests, health checks, or application startup.
+
+## Milestone 3 — Short-Term Memory Persistence
+
+- [x] SQLAlchemy user, conversation and message models with ownership and cascade constraints
+- [x] Alembic initial migration and SQLite foreign-key enforcement
+- [x] Opaque guest sessions with HttpOnly cookies and hashed session identifiers
+- [x] Owner-scoped conversation listing, paging, rename, archive/restore and delete APIs
+- [x] Persist user messages before generation and completed assistant messages after success
+- [x] Mark failed turns and avoid saving partial stream output
+- [x] Bounded chronological model context and browser history restoration
+- [x] Automated persistence, ownership, pagination and streaming tests
+- [x] Setup, migration and API documentation
+
+Milestone 4 (long-term semantic memory) is not included here.
