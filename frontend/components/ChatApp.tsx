@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown, Info, Menu, PanelRightClose, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronDown, Info, Menu, Mic, PanelRightClose, Sparkles } from "lucide-react";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage, { type DisplayMessage } from "@/components/ChatMessage";
 import ChatSidebar from "@/components/ChatSidebar";
 import TypingIndicator from "@/components/TypingIndicator";
+import VoiceModeModal from "@/components/VoiceModeModal";
 import WelcomeScreen from "@/components/WelcomeScreen";
 import { ApiError, getChatHealth, getHealth, type ChatHealthResponse } from "@/lib/api";
 import {
@@ -20,13 +21,14 @@ import {
   type ConversationDetail,
   type ConversationSummary,
 } from "@/lib/chat";
+import { sendMessageWithImage } from "@/lib/voice";
 
 const ACTIVE_CONVERSATION_KEY = "mnemora.activeConversationId";
 
 type ConnectionState = "checking" | "connected" | "database-error" | "disconnected";
 type SendOptions = { includeUser?: boolean; regenerate?: boolean; replaceMessageId?: string };
 
-function toDisplayMessages(conversation: ConversationDetail): DisplayMessage[] {
+function toDisplayMessages(conversation: ConversationDetail, previews: Map<string, string>, memories: string[]): DisplayMessage[] {
   return conversation.messages.map((message, index) => ({
     id: message.message_id || `${conversation.conversation_id}-${index}-${message.created_at}`,
     role: message.role,
@@ -35,7 +37,18 @@ function toDisplayMessages(conversation: ConversationDetail): DisplayMessage[] {
     retryPrompt: message.role === "assistant"
       ? conversation.messages.slice(0, index).reverse().find((prior) => prior.role === "user")?.content
       : undefined,
-  }));
+    imagePreviewUrl: message.role === "user" ? previewFor(conversation.conversation_id, message.content, previews) : undefined,
+  })).map((message, index, all) => {
+    if (message.role !== "assistant" || !memories.length) return message;
+    const lastAssistant = all.findLastIndex((item) => item.role === "assistant");
+    return index === lastAssistant ? { ...message, memoriesUsed: memories } : message;
+  });
+}
+
+function previewFor(conversationId: string, content: string, previews: Map<string, string>): string | undefined {
+  const match = content.match(/^\[Attached image:\s*([^\]]+)\]/);
+  if (!match) return undefined;
+  return previews.get(`${conversationId}:${match[1].trim()}`);
 }
 
 function safeError(error: unknown): string {
@@ -57,11 +70,18 @@ export default function ChatApp() {
   const [showArchived, setShowArchived] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const activeIdRef = useRef<string | null>(null);
   const restoredOnceRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const previewsRef = useRef(new Map<string, string>());
+  const memoriesRef = useRef<Record<string, string[]>>({});
+
+  const showDetail = useCallback((detail: ConversationDetail) => {
+    setMessages(toDisplayMessages(detail, previewsRef.current, memoriesRef.current[detail.conversation_id] ?? []));
+  }, []);
 
   const changeActiveId = useCallback((id: string | null) => {
     activeIdRef.current = id;
@@ -85,7 +105,6 @@ export default function ChatApp() {
       if (mounted) setConnection(error instanceof ApiError && error.status === 503 ? "database-error" : "disconnected");
     });
     getChatHealth().then((result) => { if (mounted) setChatHealth(result); }).catch(() => { if (mounted) setChatHealth(null); });
-    setLoadingConversations(true);
     const load = async () => {
       try {
         const page = await listConversations(showArchived, 50, 0);
@@ -106,7 +125,7 @@ export default function ChatApp() {
               const detail = await getConversation(candidate.conversation_id);
               if (mounted) {
                 changeActiveId(detail.conversation_id);
-                setMessages(toDisplayMessages(detail));
+                showDetail(detail);
               }
               restored = true;
               break;
@@ -139,7 +158,7 @@ export default function ChatApp() {
     };
     void load();
     return () => { mounted = false; };
-  }, [changeActiveId, showArchived]);
+  }, [changeActiveId, showArchived, showDetail]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto", block: "end" });
@@ -151,14 +170,14 @@ export default function ChatApp() {
     try {
       const detail = await getConversation(id);
       changeActiveId(id);
-      setMessages(toDisplayMessages(detail));
+      showDetail(detail);
       setMobileSidebarOpen(false);
     } catch (error) {
       setPageError(safeError(error));
     } finally {
       setLoadingConversation(false);
     }
-  }, [changeActiveId]);
+  }, [changeActiveId, showDetail]);
 
   const startConversation = useCallback(async () => {
     setPageError(null);
@@ -175,9 +194,9 @@ export default function ChatApp() {
     }
   }, [changeActiveId]);
 
-  async function submitMessage(rawText: string, options: SendOptions = {}) {
+  async function submitMessage(rawText: string, options: SendOptions = {}, imageFile?: File): Promise<string | null> {
     const message = rawText.trim();
-    if (!message || sending) return;
+    if ((!message && !imageFile) || sending) return null;
     setPageError(null);
     setSending(true);
     let conversationId = activeIdRef.current;
@@ -188,16 +207,26 @@ export default function ChatApp() {
         changeActiveId(conversationId);
         setConversations((current) => [created, ...current]);
       }
+      const targetConversationId = conversationId;
 
       const assistantId = `local-${crypto.randomUUID()}`;
       const now = new Date().toISOString();
+      let imagePreviewUrl: string | undefined;
+      if (imageFile) {
+        imagePreviewUrl = URL.createObjectURL(imageFile);
+        previewsRef.current.set(`${conversationId}:${imageFile.name}`, imagePreviewUrl);
+      }
+      const userDisplayContent = imageFile
+        ? `[Attached image: ${imageFile.name}]\n${message}`.trim()
+        : message;
+
       setMessages((current) => {
         const withoutReplaced = options.replaceMessageId
           ? current.filter((item) => item.id !== options.replaceMessageId)
           : current;
         const withUser = options.includeUser === false
           ? withoutReplaced
-          : [...withoutReplaced, { id: `local-${crypto.randomUUID()}`, role: "user" as const, content: message, createdAt: now }];
+          : [...withoutReplaced, { id: `local-${crypto.randomUUID()}`, role: "user" as const, content: userDisplayContent, createdAt: now, imagePreviewUrl }];
         return [...withUser, {
           id: assistantId,
           role: "assistant" as const,
@@ -208,12 +237,30 @@ export default function ChatApp() {
         }];
       });
 
+      // Handle Image Attachment submission
+      if (imageFile) {
+        const response = await sendMessageWithImage(targetConversationId, message, imageFile);
+        memoriesRef.current[targetConversationId] = response.memories_used ?? [];
+        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: response.response, pending: false, memoriesUsed: response.memories_used ?? [] } : item));
+        const [detail] = await Promise.all([getConversation(targetConversationId), refreshConversations()]);
+        if (activeIdRef.current === targetConversationId) showDetail(detail);
+        return response.response;
+      }
+
+      // Handle standard streaming text submission
       let completed = false;
+      let fullAssistantText = "";
       await streamChat(
-        { conversation_id: conversationId, message, regenerate: options.regenerate ?? false },
+        { conversation_id: targetConversationId, message, regenerate: options.regenerate ?? false },
         (event) => {
-          if (activeIdRef.current !== conversationId) return;
-          if (event.event === "token") {
+          if (activeIdRef.current !== targetConversationId) return;
+          if (event.event === "retrieval") {
+            memoriesRef.current[targetConversationId] = event.data.memories;
+            setMessages((current) => current.map((item) => item.id === assistantId
+              ? { ...item, memoriesUsed: event.data.memories }
+              : item));
+          } else if (event.event === "token") {
+            fullAssistantText += event.data.text;
             setMessages((current) => current.map((item) => item.id === assistantId
               ? { ...item, content: item.content + event.data.text, pending: false }
               : item));
@@ -229,9 +276,11 @@ export default function ChatApp() {
       );
 
       if (completed) {
-        const [detail] = await Promise.all([getConversation(conversationId), refreshConversations()]);
-        if (activeIdRef.current === conversationId) setMessages(toDisplayMessages(detail));
+        const [detail] = await Promise.all([getConversation(targetConversationId), refreshConversations()]);
+        if (activeIdRef.current === targetConversationId) showDetail(detail);
+        return fullAssistantText;
       }
+      return null;
     } catch (error) {
       const messageText = safeError(error);
       if (conversationId && activeIdRef.current === conversationId) {
@@ -255,10 +304,15 @@ export default function ChatApp() {
       } else {
         setPageError(messageText);
       }
+      return null;
     } finally {
       setSending(false);
       refreshConversations().catch(() => undefined);
     }
+  }
+
+  async function handleVoiceModeTurn(transcript: string): Promise<string | null> {
+    return submitMessage(transcript);
   }
 
   async function rename(id: string, title: string) {
@@ -273,7 +327,7 @@ export default function ChatApp() {
     try {
       const detail = await clearConversation(id);
       await refreshConversations();
-      if (activeIdRef.current === id) setMessages(toDisplayMessages(detail));
+      if (activeIdRef.current === id) showDetail(detail);
     } catch (error) { setPageError(safeError(error)); }
   }
 
@@ -340,6 +394,15 @@ export default function ChatApp() {
             <div className="min-w-0"><p className="truncate text-sm font-medium text-slate-200">{activeConversation?.title ?? "New conversation"}</p><p className="mt-0.5 text-[10px] text-slate-600">Personal AI workspace</p></div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => setVoiceModalOpen(true)}
+              aria-label="Open voice assistant mode"
+              className="inline-flex items-center gap-1.5 rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-[11px] font-medium text-violet-200 shadow-[0_0_15px_rgba(139,115,255,0.15)] hover:bg-violet-500/20 hover:border-violet-400/50 transition"
+            >
+              <Mic size={13} className="text-violet-400 animate-pulse" />
+              <span>Voice Mode</span>
+            </button>
             <span className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] sm:flex ${connection === "connected" ? "border-emerald-300/10 bg-emerald-300/[0.045] text-emerald-200/80" : connection === "database-error" || connection === "disconnected" ? "border-rose-300/10 bg-rose-300/[0.045] text-rose-200/80" : "border-white/[0.08] text-slate-500"}`}><span className={`h-1.5 w-1.5 rounded-full ${connection === "connected" ? "bg-emerald-400" : connection === "database-error" || connection === "disconnected" ? "bg-rose-400" : "animate-pulse bg-violet-300"}`} />{connectionText}</span>
             <span className="hidden rounded-full border border-violet-300/10 bg-violet-300/[0.04] px-3 py-1.5 text-[11px] text-violet-200/70 md:inline-flex"><Sparkles size={12} className="mr-1.5" />{chatHealth?.model ?? "MNEMORA"}</span>
             <button aria-label={infoOpen ? "Hide assistant information" : "Show assistant information"} onClick={() => setInfoOpen((value) => !value)} className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"><Info size={17} /></button>
@@ -360,8 +423,21 @@ export default function ChatApp() {
                 <div ref={bottomRef} />
               </div>}
         </div>
-        <div className="shrink-0 px-4 pb-4 pt-2 sm:px-8 sm:pb-6"><ChatInput disabled={sending} onSend={(message) => void submitMessage(message)} /></div>
+        <div className="shrink-0 px-4 pb-4 pt-2 sm:px-8 sm:pb-6">
+          <ChatInput
+            disabled={sending}
+            onSend={(message, image) => void submitMessage(message, {}, image)}
+            onVoiceMode={() => setVoiceModalOpen(true)}
+          />
+        </div>
       </main>
+
+      <VoiceModeModal
+        isOpen={voiceModalOpen}
+        onClose={() => setVoiceModalOpen(false)}
+        conversationId={activeId}
+        onMessageSent={handleVoiceModeTurn}
+      />
 
       {infoOpen && <>
         <button aria-label="Close assistant information" onClick={() => setInfoOpen(false)} className="fixed inset-0 z-20 bg-black/60 backdrop-blur-sm lg:hidden" />

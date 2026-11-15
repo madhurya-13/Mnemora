@@ -1,10 +1,10 @@
 # MNEMORA — An AI That Remembers, Learns and Evolves
 
-MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold, Milestone 2 added Gemini chat, and Milestone 3 added persistent guest-owned conversations. Milestone 4 adds reviewable long-term memories, relational metadata, Chroma vectors, semantic retrieval, and a memory dashboard. Voice and agent orchestration remain future work.
+MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold, Milestone 2 added Gemini chat, and Milestone 3 added persistent guest-owned conversations. Milestone 4 adds reviewable long-term memories, relational metadata, Chroma vectors, semantic retrieval, and a memory dashboard. Milestone 5 adds retrieval intelligence, and Milestone 6 adds voice mode plus image and audio input. Agent orchestration remains future work.
 
 ## Objectives and planned capabilities
 
-The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. This repository implements conversational AI, persistent short-term history, and the Milestone 4 long-term memory pipeline. Knowledge graphs, voice and advanced orchestration are future milestones.
+The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. This repository implements conversational AI, persistent short-term history, the long-term memory pipeline, semantic retrieval, and voice/multimodal interaction. Knowledge graphs and advanced orchestration are future milestones.
 
 ## Technology and architecture
 
@@ -289,3 +289,64 @@ To inspect the local vector count from `backend`, run `python -c "import chromad
 ### Runtime limitation in this workspace
 
 On this Windows host, the OpenAI API currently returns `credit_balance_exhausted` for embedding requests. Chroma's persistent client works, and the embedding provider can be switched to Google's Gemini free tier with `MEMORY_EMBEDDING_PROVIDER=google`. The dashboard reports embedding and vector-index availability separately. A transient Chroma startup failure is retried on subsequent health checks rather than cached for the lifetime of the backend process.
+
+## Milestone 6 - Voice and Multimodal Interaction
+
+Milestone 6 extends the existing chat and memory pipeline without creating a separate assistant:
+
+- Microphone recordings and uploaded audio are validated and transcribed through `POST /api/v1/voice/transcribe` or `POST /api/v1/voice/transcribe-upload`.
+- Assistant messages can be converted to browser-playable audio through `POST /api/v1/voice/speak`.
+- Speech uses OpenAI when `OPENAI_API_KEY` is configured and automatically falls back to Google Gemini when OpenAI is unavailable, out of credits, or not configured. The fallback uses `GEMINI_STT_MODEL` for transcription and `GEMINI_TTS_MODEL` for speech, and returns WAV audio when Gemini is the active provider.
+- Images are validated in memory and analyzed through `POST /api/v1/chat/{conversation_id}/message-with-image`; the resulting visual context is sent through normal retrieval, response persistence, and memory extraction.
+- Voice mode uses the same conversation endpoint and stores transcript text, never raw audio by default.
+- Voice preferences and configured limits are available at `GET`/`PUT /api/v1/voice/settings`.
+
+Configure these backend variables in the ignored `backend/.env`:
+
+```dotenv
+OPENAI_API_KEY=...
+OPENAI_STT_MODEL=whisper-1
+OPENAI_TTS_MODEL=tts-1
+OPENAI_TTS_VOICE=alloy
+OPENAI_VISION_MODEL=gpt-4o-mini
+GEMINI_STT_MODEL=gemini-3.5-flash-lite
+GEMINI_TTS_MODEL=gemini-3.8-flash-tts
+GEMINI_TTS_VOICE=Kore
+MAX_AUDIO_UPLOAD_MB=20
+MAX_IMAGE_UPLOAD_MB=10
+VOICE_ENABLED=true
+TTS_ENABLED=true
+IMAGE_INPUT_ENABLED=true
+STORE_RAW_AUDIO=false
+STORE_UPLOADED_IMAGES=false
+```
+
+No additional dependency is required beyond `backend/requirements.txt`; the OpenAI SDK is used server-side and credentials are never sent to the browser. Run `alembic upgrade head` only when migrations are pending; this milestone does not add a database migration.
+
+### Using the multimodal UI
+
+1. Start the backend and frontend using the commands above.
+2. Use the microphone button in the composer, stop the recording, and edit the transcript before sending.
+3. Use the audio attachment button to transcribe an existing supported audio file.
+4. Use the image attachment button or drop an image into the composer, review the preview, and send it with a question.
+5. Open **Voice Mode** for speak/transcribe/respond/speak turns. Disable continuous listening or mute playback when needed.
+6. Use **Listen** on any assistant response for explicit text-to-speech playback; ordinary text chat does not autoplay audio.
+
+### Troubleshooting and verification
+
+- Microphone access requires a browser permission and a secure context (`localhost` is supported). Denied permission is shown in the composer or voice modal.
+- Audio is limited to 20 MB by default and images to 10 MB. Validation checks file signatures, not just extensions.
+- Voice Mode ignores recordings and in-flight replies after the modal is closed. Toggle **Mute** to skip spoken replies, and use **Replay** if the browser blocks autoplay.
+- If chat works but voice or images do not, verify `OPENAI_API_KEY`, `GOOGLE_API_KEY`, feature flags, and the backend logs. Speech and vision automatically use Gemini when OpenAI is unavailable, so a working `GOOGLE_API_KEY` is enough for voice.
+- Swagger is available at `http://localhost:8000/docs`. Run backend tests from the repository root with:
+
+```powershell
+$env:PYTHONPATH = (Join-Path (Get-Location) "backend")
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+python -m pytest
+Set-Location frontend
+npm run lint
+npm run build
+```
+
+The automated suite mocks provider calls. Manual acceptance should cover text chat, microphone permission and transcription, voice mode, TTS play/pause/stop, audio upload, image understanding, memory-aware voice/image turns, ownership isolation, and invalid/oversized/corrupted uploads.

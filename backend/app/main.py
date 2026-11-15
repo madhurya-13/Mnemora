@@ -18,6 +18,7 @@ from app.api.chat import router as chat_router
 from app.api.conversations import legacy_router as legacy_conversations_router
 from app.api.conversations import router as conversations_router
 from app.api.memories import router as memories_router
+from app.api.voice import router as voice_router
 from app.config import settings
 from app.database.db import get_db
 from app.memory.workflow import retry_worker
@@ -45,6 +46,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,6 +56,7 @@ app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(legacy_conversations_router)
 app.include_router(memories_router)
+app.include_router(voice_router)
 
 
 @app.exception_handler(RequestValidationError)

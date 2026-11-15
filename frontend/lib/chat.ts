@@ -10,7 +10,7 @@ export type ChatMessage = {
   status: "pending" | "completed" | "failed";
 };
 export type ChatRequest = { conversation_id: string | null; message: string; regenerate?: boolean };
-export type ChatResponse = { conversation_id: string; response: string; role: "assistant" };
+export type ChatResponse = { conversation_id: string; response: string; role: "assistant"; memories_used?: string[] };
 export type ConversationSummary = {
   conversation_id: string;
   title: string;
@@ -25,6 +25,7 @@ export type ConversationPage = { items: ConversationSummary[]; total: number; li
 export type MessagePage = { items: ChatMessage[]; total: number; limit: number; offset: number };
 export type StreamEvent =
   | { event: "conversation"; data: { conversation_id: string } }
+  | { event: "retrieval"; data: { memories: string[] } }
   | { event: "token"; data: { text: string } }
   | { event: "done"; data: { conversation_id: string; role: "assistant" } }
   | { event: "error"; data: { message: string; retryable: boolean } };
@@ -119,6 +120,8 @@ export async function streamChat(
     if (!decoded) return;
     if (decoded.event === "conversation" && typeof decoded.data === "object" && decoded.data !== null && "conversation_id" in decoded.data && typeof decoded.data.conversation_id === "string") {
       onEvent({ event: "conversation", data: { conversation_id: decoded.data.conversation_id } });
+    } else if (decoded.event === "retrieval" && typeof decoded.data === "object" && decoded.data !== null && "memories" in decoded.data && Array.isArray(decoded.data.memories)) {
+      onEvent({ event: "retrieval", data: { memories: decoded.data.memories.filter((item): item is string => typeof item === "string") } });
     } else if (decoded.event === "token" && typeof decoded.data === "object" && decoded.data !== null && "text" in decoded.data && typeof decoded.data.text === "string") {
       onEvent({ event: "token", data: { text: decoded.data.text } });
     } else if (decoded.event === "done" && typeof decoded.data === "object" && decoded.data !== null && "conversation_id" in decoded.data && typeof decoded.data.conversation_id === "string") {

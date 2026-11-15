@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
+    openai_stt_model: str = "whisper-1"
+    openai_tts_model: str = "tts-1"
+    openai_tts_voice: str = "alloy"
+    openai_vision_model: str = "gpt-4o-mini"
+    gemini_stt_model: str = "gemini-3.5-flash-lite"
+    gemini_tts_model: str = "gemini-3.8-flash-tts"
+    gemini_tts_voice: str = "Kore"
+    max_audio_upload_mb: int = Field(default=20, ge=1, le=100)
+    max_image_upload_mb: int = Field(default=10, ge=1, le=50)
+    voice_enabled: bool = True
+    tts_enabled: bool = True
+    image_input_enabled: bool = True
+    store_raw_audio: bool = False
+    store_uploaded_images: bool = False
     memory_embedding_provider: Literal["openai", "google"] = "openai"
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dimensions: int = Field(default=768, ge=128, le=3072)
