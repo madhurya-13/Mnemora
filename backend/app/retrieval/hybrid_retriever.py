@@ -39,6 +39,7 @@ def _memory_predicates(user_id: UUID, *, category: str | None, min_importance: f
     predicates = [
         Memory.user_id == user_id,
         Memory.approval_status == "approved",
+        Memory.lifecycle_status == "active",
         Memory.vector_sync_status == "synced",
         Memory.importance >= max(settings.memory_min_importance, settings.retrieval_min_importance, min_importance or 0),
         Memory.confidence >= settings.memory_min_confidence,

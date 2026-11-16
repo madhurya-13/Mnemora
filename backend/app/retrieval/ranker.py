@@ -27,13 +27,14 @@ def score_memory(memory: Memory, *, semantic: float, keyword: float, category_ma
         "semantic": settings.retrieval_weight_semantic, "keyword": settings.retrieval_weight_keyword,
         "importance": settings.retrieval_weight_importance, "confidence": settings.retrieval_weight_confidence,
         "recency": settings.retrieval_weight_recency, "category": settings.retrieval_weight_category,
-        "usage": settings.retrieval_weight_usage,
+        "usage": settings.retrieval_weight_usage, "utility": settings.retrieval_weight_utility,
     }
     total = sum(weights.values()) or 1.0
     components = {
         "semantic": max(0.0, min(1.0, semantic)), "keyword": max(0.0, min(1.0, keyword)),
         "importance": max(0.0, min(1.0, memory.importance)), "confidence": max(0.0, min(1.0, memory.confidence)),
         "recency": recency, "category": max(0.0, min(1.0, category_match)), "usage": usage,
+        "utility": max(0.0, min(1.0, getattr(memory, "utility_score", 0.0) or 0.0)),
     }
     components["final"] = sum(weights[key] * value for key, value in components.items()) / total
     return components

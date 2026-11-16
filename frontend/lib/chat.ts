@@ -10,7 +10,7 @@ export type ChatMessage = {
   status: "pending" | "completed" | "failed";
 };
 export type ChatRequest = { conversation_id: string | null; message: string; regenerate?: boolean };
-export type ChatResponse = { conversation_id: string; response: string; role: "assistant"; memories_used?: string[] };
+export type ChatResponse = { conversation_id: string; response: string; role: "assistant"; assistant_message_id?: string | null; memories_used?: string[] };
 export type ConversationSummary = {
   conversation_id: string;
   title: string;
@@ -27,7 +27,7 @@ export type StreamEvent =
   | { event: "conversation"; data: { conversation_id: string } }
   | { event: "retrieval"; data: { memories: string[] } }
   | { event: "token"; data: { text: string } }
-  | { event: "done"; data: { conversation_id: string; role: "assistant" } }
+  | { event: "done"; data: { conversation_id: string; role: "assistant"; assistant_message_id?: string | null } }
   | { event: "error"; data: { message: string; retryable: boolean } };
 
 export const listConversations = (archived = false, limit = 50, offset = 0) =>
@@ -126,7 +126,13 @@ export async function streamChat(
       onEvent({ event: "token", data: { text: decoded.data.text } });
     } else if (decoded.event === "done" && typeof decoded.data === "object" && decoded.data !== null && "conversation_id" in decoded.data && typeof decoded.data.conversation_id === "string") {
       finished = true;
-      onEvent({ event: "done", data: { conversation_id: decoded.data.conversation_id, role: "assistant" } });
+      onEvent({ event: "done", data: {
+        conversation_id: decoded.data.conversation_id,
+        role: "assistant",
+        assistant_message_id: "assistant_message_id" in decoded.data && typeof decoded.data.assistant_message_id === "string"
+          ? decoded.data.assistant_message_id
+          : null,
+      } });
     } else if (decoded.event === "error" && typeof decoded.data === "object" && decoded.data !== null && "message" in decoded.data && typeof decoded.data.message === "string") {
       failed = true;
       onEvent({ event: "error", data: { message: decoded.data.message, retryable: "retryable" in decoded.data && decoded.data.retryable === true } });

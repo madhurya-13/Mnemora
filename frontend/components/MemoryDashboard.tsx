@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Check, Clock3, Database, Eye, LoaderCircle, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import AdaptiveMemoryPanel from "@/components/AdaptiveMemoryPanel";
 import { ApiError, requestJson } from "@/lib/api";
 import {
   approveMemory, createMemory, deleteMemory, getMemoryConflicts, getMemoryHistory, getMemoryStats, getRetrievalStats, listMemories, rejectMemory,
-  resolveMemoryConflict, searchMemories, updateMemory, type Memory, type MemoryCategory, type MemorySearchResult, type MemoryStats, type MemoryConflict, type RetrievalStats,
+  resolveMemoryConflict, searchMemories, setMemoryLifecycle, updateMemory, type Memory, type MemoryCategory, type MemorySearchResult, type MemoryStats, type MemoryConflict, type RetrievalStats,
 } from "@/lib/memories";
 
 const categories: MemoryCategory[] = ["personal", "education", "career", "interests", "preferences", "projects", "goals", "temporary", "other"];
@@ -41,7 +42,7 @@ export default function MemoryDashboard() {
   const [retrievalStats, setRetrievalStats] = useState<RetrievalStats | null>(null);
   const [minimumImportance, setMinimumImportance] = useState(0);
   const [sortBy, setSortBy] = useState("relevance");
-  const [history, setHistory] = useState<{ history_id: string; content: string; change_reason: string; created_at: string }[]>([]);
+  const [history, setHistory] = useState<{ history_id: string; content: string; change_reason: string; change_type: string; source_conversation_id: string | null; created_at: string }[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -119,8 +120,18 @@ export default function MemoryDashboard() {
     finally { setBusyId(null); }
   }
 
-  async function saveEdit(id: string) {
-    setBusyId(id);
+  async function performLifecycle(memory: Memory, status: "active" | "archived") {
+    setBusyId(memory.memory_id);
+    setError(null);
+    try {
+      await setMemoryLifecycle(memory.memory_id, status);
+      setNotice(status === "archived" ? "Memory archived. It is excluded from retrieval but can be restored." : "Memory restored to active retrieval.");
+      await refresh();
+    } catch (caught) { setError(errorMessage(caught)); }
+    finally { setBusyId(null); }
+  }
+
+  async function saveEdit(id: string) {    setBusyId(id);
     try {
       await updateMemory(id, { content: draft });
       setEditingId(null);
@@ -174,6 +185,8 @@ export default function MemoryDashboard() {
         {[["All memories", stats?.total], ["Approved", stats?.approved], ["Awaiting approval", stats?.pending], ["Index sync pending", stats?.vector_sync_pending]].map(([title, value]) => <div key={String(title)} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5"><p className="text-xs uppercase tracking-[0.16em] text-slate-500">{title}</p><p className="mt-3 text-3xl font-light text-slate-100">{loading ? "—" : value}</p></div>)}
       </section>
 
+      <AdaptiveMemoryPanel refreshKey={stats?.total ?? 0} />
+
       <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="space-y-5">
           <form onSubmit={runSearch} className="flex gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-2 focus-within:border-violet-300/25">
@@ -199,12 +212,15 @@ export default function MemoryDashboard() {
               : <div className="grid gap-3 xl:grid-cols-2">{visibleItems.map((memory) => {
                 const relevance = searchResults?.find((result) => result.memory.memory_id === memory.memory_id);
                 return <article key={memory.memory_id} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4 transition hover:border-violet-300/15">
-                  <div className="flex flex-wrap items-center gap-2"><span className="rounded-full border border-violet-300/10 bg-violet-300/[0.06] px-2.5 py-1 text-[10px] text-violet-200/80">{label(memory.category)}</span><span className={`rounded-full px-2.5 py-1 text-[10px] ${memory.approval_status === "approved" ? "bg-emerald-300/[0.08] text-emerald-200" : memory.approval_status === "pending" ? "bg-amber-300/[0.08] text-amber-100" : "bg-slate-300/[0.06] text-slate-400"}`}>{label(memory.approval_status)}</span>{memory.vector_sync_status === "failed" && <span className="text-[10px] text-rose-200">Index sync failed</span>}{relevance && <span className="ml-auto text-[10px] text-slate-500">Match {score(relevance.similarity)}</span>}</div>
+                  <div className="flex flex-wrap items-center gap-2"><span className="rounded-full border border-violet-300/10 bg-violet-300/[0.06] px-2.5 py-1 text-[10px] text-violet-200/80">{label(memory.category)}</span><span className={`rounded-full px-2.5 py-1 text-[10px] ${memory.approval_status === "approved" ? "bg-emerald-300/[0.08] text-emerald-200" : memory.approval_status === "pending" ? "bg-amber-300/[0.08] text-amber-100" : "bg-slate-300/[0.06] text-slate-400"}`}>{label(memory.approval_status)}</span>{memory.lifecycle_status !== "active" && <span className="rounded-full bg-blue-300/[0.07] px-2.5 py-1 text-[10px] text-blue-200">{label(memory.lifecycle_status.replaceAll("_", " "))}</span>}{memory.vector_sync_status === "failed" && <span className="text-[10px] text-rose-200">Index sync failed</span>}{relevance && <span className="ml-auto text-[10px] text-slate-500">Match {score(relevance.similarity)}</span>}</div>
                   {editingId === memory.memory_id ? <textarea value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} className="mt-4 min-h-24 w-full rounded-xl border border-violet-300/20 bg-black/20 p-3 text-sm leading-6 text-slate-200 outline-none" /> : <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-200">{memory.content}</p>}
                   {relevance && <div className="mt-3 rounded-lg border border-violet-300/[0.08] bg-violet-300/[0.025] p-3 text-[10px] leading-5 text-slate-400"><p>{relevance.retrieval_reason}</p><p className="mt-1 text-slate-500">Semantic {score(relevance.score_components.semantic ?? relevance.similarity)} · Keyword {score(relevance.keyword_score)} · Importance {score(relevance.score_components.importance ?? memory.importance)} · Recency {score(relevance.recency_score)}</p></div>}
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-slate-500"><span>Importance <strong className="ml-1 font-medium text-slate-300">{score(memory.importance)}</strong></span><span>Confidence <strong className="ml-1 font-medium text-slate-300">{score(memory.confidence)}</strong></span><span>Created {date(memory.created_at)}</span><span>Updated {date(memory.updated_at)}</span></div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-slate-500"><span>Importance <strong className="ml-1 font-medium text-slate-300">{score(memory.importance)}</strong></span><span>Confidence <strong className="ml-1 font-medium text-slate-300">{score(memory.confidence)}</strong></span><span>Utility <strong className="ml-1 font-medium text-slate-300">{score(memory.utility_score)}</strong></span><span>Created {date(memory.created_at)}</span><span>Updated {date(memory.updated_at)}</span></div>
                   <div className="mt-4 flex flex-wrap items-center gap-1 border-t border-white/[0.06] pt-3">
                     <button onClick={() => void showHistory(memory)} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] text-slate-400 hover:bg-white/[0.05] hover:text-slate-100"><Eye size={13} /> View history</button>
+                    {memory.lifecycle_status === "archived"
+                      ? <button disabled={busyId === memory.memory_id} onClick={() => void performLifecycle(memory, "active")} className="rounded-lg px-2.5 py-2 text-[11px] text-emerald-200 hover:bg-emerald-300/[0.08] disabled:opacity-40">Restore</button>
+                      : memory.approval_status === "approved" && <button disabled={busyId === memory.memory_id} onClick={() => void performLifecycle(memory, "archived")} className="rounded-lg px-2.5 py-2 text-[11px] text-slate-400 hover:bg-white/[0.05] disabled:opacity-40">Archive</button>}
                     {editingId === memory.memory_id ? <><button disabled={busyId === memory.memory_id} onClick={() => void saveEdit(memory.memory_id)} className="rounded-lg px-2.5 py-2 text-[11px] text-violet-200 hover:bg-violet-300/[0.08]">Save edit</button><button onClick={() => setEditingId(null)} className="rounded-lg px-2.5 py-2 text-[11px] text-slate-500 hover:bg-white/[0.05]">Cancel</button></> : <button onClick={() => { setEditingId(memory.memory_id); setDraft(memory.content); }} className="rounded-lg px-2.5 py-2 text-[11px] text-slate-400 hover:bg-white/[0.05] hover:text-slate-100">Edit</button>}
                     {memory.approval_status === "pending" && <><button disabled={busyId === memory.memory_id} onClick={() => void perform(memory.memory_id, "approve")} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-[11px] text-emerald-200 hover:bg-emerald-300/[0.08]"><Check size={13} /> Approve</button><button disabled={busyId === memory.memory_id} onClick={() => void perform(memory.memory_id, "reject")} className="rounded-lg px-2.5 py-2 text-[11px] text-amber-100/80 hover:bg-amber-300/[0.06]">Reject</button></>}
                     <button disabled={busyId === memory.memory_id} onClick={() => void perform(memory.memory_id, "delete")} className="ml-auto inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-[11px] text-rose-200/70 hover:bg-rose-300/[0.07] hover:text-rose-100"><Trash2 size={13} /> Delete</button>
@@ -224,6 +240,6 @@ export default function MemoryDashboard() {
       </section>
     </div>
 
-    {selected && <div role="presentation" onClick={() => setSelected(null)} className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-4 backdrop-blur-sm"><section role="dialog" aria-modal="true" aria-labelledby="memory-details-title" onClick={(event) => event.stopPropagation()} className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#10121b] p-6 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.18em] text-violet-200/70">{label(selected.category)} · {label(selected.approval_status)}</p><h2 id="memory-details-title" className="mt-2 text-lg font-medium">Memory history</h2></div><button onClick={() => setSelected(null)} aria-label="Close details" className="rounded-lg p-2 text-slate-500 hover:bg-white/[0.05]"><X size={17} /></button></div><p className="mt-5 whitespace-pre-wrap text-sm leading-7 text-slate-200">{selected.content}</p><div className="mt-5 grid grid-cols-2 gap-3 text-xs text-slate-500"><span>Importance: {score(selected.importance)}</span><span>Confidence: {score(selected.confidence)}</span><span>Created: {date(selected.created_at)}</span><span>Updated: {date(selected.updated_at)}</span></div><h3 className="mt-6 text-xs font-medium text-slate-300">Previous versions</h3>{history.length ? <ol className="mt-3 space-y-3">{history.map((entry) => <li key={entry.history_id} className="rounded-lg border border-white/[0.06] p-3"><p className="whitespace-pre-wrap text-xs leading-5 text-slate-300">{entry.content}</p><p className="mt-2 text-[10px] text-slate-600">{entry.change_reason.replaceAll("_", " ")} · {date(entry.created_at)}</p></li>)}</ol> : <p className="mt-2 text-xs text-slate-600">No previous versions recorded.</p>}</section></div>}
+    {selected && <div role="presentation" onClick={() => setSelected(null)} className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-4 backdrop-blur-sm"><section role="dialog" aria-modal="true" aria-labelledby="memory-details-title" onClick={(event) => event.stopPropagation()} className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#10121b] p-6 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.18em] text-violet-200/70">{label(selected.category)} · {label(selected.approval_status)}</p><h2 id="memory-details-title" className="mt-2 text-lg font-medium">Memory history</h2></div><button onClick={() => setSelected(null)} aria-label="Close details" className="rounded-lg p-2 text-slate-500 hover:bg-white/[0.05]"><X size={17} /></button></div><p className="mt-5 whitespace-pre-wrap text-sm leading-7 text-slate-200">{selected.content}</p><div className="mt-5 grid grid-cols-2 gap-3 text-xs text-slate-500"><span>Importance: {score(selected.importance)}</span><span>Confidence: {score(selected.confidence)}</span><span>Created: {date(selected.created_at)}</span><span>Updated: {date(selected.updated_at)}</span></div><h3 className="mt-6 text-xs font-medium text-slate-300">Previous versions</h3>{history.length ? <ol className="mt-3 space-y-3">{history.map((entry) => <li key={entry.history_id} className="rounded-lg border border-white/[0.06] p-3"><p className="whitespace-pre-wrap text-xs leading-5 text-slate-300">{entry.content}</p><p className="mt-2 text-[10px] text-slate-600">{entry.change_type.replaceAll("_", " ")} · {entry.change_reason.replaceAll("_", " ")} · {date(entry.created_at)}</p></li>)}</ol> : <p className="mt-2 text-xs text-slate-600">No previous versions recorded.</p>}</section></div>}
   </main>;
 }

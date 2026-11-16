@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.memory import Memory
 from app.retrieval import hybrid_retriever
 from app.schemas.memory import MemorySearchResult
+from app.services.adaptive_memory import personalization_engine
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +44,19 @@ async def search_memories(
 
 
 async def retrieve_context(db: Session, user_id: UUID, query: str) -> list[str]:
-    """Return context only for relevant, approved memories; failure never blocks chat."""
+    """Return memory and preference context; any failure never blocks chat."""
+    blocks: list[str] = []
     try:
         result = await hybrid_retriever.retrieve(db, user_id, query)
         text = result.context["text"]
-        return [text] if text else []
+        if text:
+            blocks.append(text)
     except Exception as error:
         logger.warning("Memory retrieval skipped (%s).", type(error).__name__)
-        return []
+    try:
+        personalization = personalization_engine.build_personalization_context(db, user_id, query)
+        if personalization:
+            blocks.append(personalization)
+    except Exception as error:
+        logger.warning("Personalization context skipped (%s).", type(error).__name__)
+    return blocks

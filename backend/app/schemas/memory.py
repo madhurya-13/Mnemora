@@ -64,6 +64,9 @@ class MemoryResponse(BaseModel):
     source_conversation_id: UUID | None
     source_message_ids: list[str]
     approval_status: ApprovalStatus
+    lifecycle_status: str
+    utility_score: float
+    last_evaluated_at: datetime | None
     similar_memory_id: UUID | None
     vector_sync_status: str
     created_at: datetime
@@ -203,6 +206,8 @@ class MemoryHistoryResponse(BaseModel):
     memory_type: str
     approval_status: str
     change_reason: str
+    change_type: str
+    source_conversation_id: UUID | None
     created_at: datetime
 
 

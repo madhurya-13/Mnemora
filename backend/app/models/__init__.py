@@ -1,5 +1,12 @@
 """Database models exported for Alembic metadata discovery."""
 
+from app.models.adaptive import (
+    AdaptiveProcessingJob,
+    AdaptiveSettings,
+    MemoryFeedback,
+    MemoryPattern,
+    UserPreference,
+)
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.memory import (
@@ -9,6 +16,8 @@ from app.models.memory import (
 from app.models.user import User
 
 __all__ = [
-    "Conversation", "Message", "Memory", "MemoryConflict", "MemoryExtractionJob",
-    "MemoryHistory", "MemoryRetrievalEvent", "MemoryRetrievalItem", "MemoryVectorOutbox", "User",
+    "AdaptiveProcessingJob", "AdaptiveSettings", "Conversation", "Memory", "MemoryConflict",
+    "MemoryExtractionJob", "MemoryFeedback", "MemoryHistory", "MemoryPattern",
+    "MemoryRetrievalEvent", "MemoryRetrievalItem", "MemoryVectorOutbox", "Message",
+    "User", "UserPreference",
 ]

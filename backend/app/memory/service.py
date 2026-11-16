@@ -23,6 +23,7 @@ from app.models.memory import (
 )
 from app.retrieval.conflict_detector import detect_conflict
 from app.schemas.memory import MemoryCandidate, MemoryCreateRequest, MemorySearchResult
+from app.services.adaptive_memory.memory_evolution import classify_change
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +57,13 @@ def _enqueue(db: Session, memory: Memory, operation: str = "upsert") -> None:
     db.add(MemoryVectorOutbox(memory_id=memory.memory_id, user_id=memory.user_id, operation=operation))
 
 
-def _record_history(db: Session, memory: Memory, reason: str) -> None:
+def _record_history(db: Session, memory: Memory, reason: str, *, change_type: str | None = None, source_conversation_id: UUID | None = None) -> None:
     db.add(MemoryHistory(
         memory_id=memory.memory_id, user_id=memory.user_id, content=memory.content,
         category=memory.category, importance=memory.importance, confidence=memory.confidence,
         memory_type=memory.memory_type, approval_status=memory.approval_status,
-        change_reason=reason,
+        change_reason=reason, change_type=change_type or "user_update",
+        source_conversation_id=source_conversation_id,
     ))
 
 
@@ -204,7 +206,7 @@ async def approve_memory(db: Session, user_id: UUID, memory_id: UUID) -> Memory:
                     conflict.status = "resolved_updated"
                     conflict.resolution = "accept_update"
                     conflict.resolved_at = _now()
-            _record_history(db, canonical, "duplicate_merge")
+            _record_history(db, canonical, "duplicate_merge", change_type="duplicate_merge")
             canonical.source_message_ids = sorted(_source_ids(canonical) | _source_ids(memory))
             if canonical.source_conversation_id is None:
                 canonical.source_conversation_id = memory.source_conversation_id
@@ -277,7 +279,11 @@ def resolve_conflict(
         content = edited_content if resolution == "edit" else candidate.content
         if not content or contains_sensitive_information(content):
             raise MemoryUnsafeContentError("The updated memory is blank or contains sensitive information.")
-        _record_history(db, existing, "conflict_resolution")
+        change_type = classify_change(existing.content, content, candidate.category, reason="conflict_resolution")
+        _record_history(
+            db, existing, "conflict_resolution",
+            change_type=change_type, source_conversation_id=candidate.source_conversation_id,
+        )
         existing.content = content
         existing.category = candidate.category
         existing.importance = candidate.importance
@@ -357,13 +363,30 @@ def update_memory(db: Session, user_id: UUID, memory_id: UUID, changes: dict[str
         raise MemoryNotFoundError
     if "content" in changes and contains_sensitive_information(changes["content"]):
         raise MemoryUnsafeContentError("This memory contains sensitive information and cannot be stored.")
-    _record_history(db, memory, "user_update")
+    old_content = memory.content
+    new_content = changes.get("content") or old_content
+    category = changes.get("category") or memory.category
+    change_type = classify_change(old_content, new_content, category)
+    _record_history(db, memory, "user_update", change_type=change_type)
     for field, value in changes.items():
         if value is not None:
             setattr(memory, field, value)
     memory.updated_at = _now()
     if memory.approval_status == "approved":
         _enqueue(db, memory)
+    db.commit()
+    db.refresh(memory)
+    return memory
+
+
+def set_lifecycle_status(db: Session, user_id: UUID, memory_id: UUID, status: str) -> Memory:
+    """Let the owner archive, restore or mark a memory for review without deleting it."""
+    memory = db.scalar(select(Memory).where(Memory.memory_id == memory_id, Memory.user_id == user_id))
+    if memory is None:
+        raise MemoryNotFoundError
+    memory.lifecycle_status = status
+    memory.archived_at = _now() if status == "archived" else None
+    memory.updated_at = _now()
     db.commit()
     db.refresh(memory)
     return memory

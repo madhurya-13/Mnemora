@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException
 
 from fastapi.responses import JSONResponse
 
+from app.api.adaptive import router as adaptive_router
 from app.api.chat import router as chat_router
 from app.api.conversations import legacy_router as legacy_conversations_router
 from app.api.conversations import router as conversations_router
@@ -22,19 +23,23 @@ from app.api.voice import router as voice_router
 from app.config import settings
 from app.database.db import get_db
 from app.memory.workflow import retry_worker
+from app.services.adaptive_memory.workflow import adaptive_retry_worker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     worker = asyncio.create_task(retry_worker())
+    adaptive_worker = asyncio.create_task(adaptive_retry_worker())
     try:
         yield
     finally:
-        worker.cancel()
-        try:
-            await worker
-        except asyncio.CancelledError:
-            pass
+        for task in (worker, adaptive_worker):
+            task.cancel()
+        for task in (worker, adaptive_worker):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 app = FastAPI(
     title=settings.application_name,
@@ -55,6 +60,7 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(legacy_conversations_router)
+app.include_router(adaptive_router)
 app.include_router(memories_router)
 app.include_router(voice_router)
 

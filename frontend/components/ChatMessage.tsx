@@ -12,12 +12,15 @@ import {
   Play,
   RotateCcw,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   UserRound,
   Volume2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { MessageRole } from "@/lib/chat";
+import { submitResponseFeedback } from "@/lib/memories";
 import { synthesizeSpeech } from "@/lib/voice";
 
 export type DisplayMessage = {
@@ -31,6 +34,7 @@ export type DisplayMessage = {
   pending?: boolean;
   imagePreviewUrl?: string;
   memoriesUsed?: string[];
+  assistantMessageId?: string;
 };
 
 type Props = {
@@ -38,24 +42,51 @@ type Props = {
   canRegenerate?: boolean;
   onRetry?: (prompt: string, regenerate?: boolean) => void;
   voiceName?: string;
+  conversationId?: string | null;
 };
 
 type AudioState = "idle" | "loading" | "playing" | "paused";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default function ChatMessage({
   message,
   canRegenerate = false,
   onRetry,
   voiceName,
+  conversationId,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [audioState, setAudioState] = useState<AudioState>("idle");
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<"helpful" | "not_helpful" | null>(null);
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const audioBlobUrlRef = useRef<string | null>(null);
 
   const isUser = message.role === "user";
+  const feedbackTargetId = message.assistantMessageId ?? message.id;
+  const feedbackAvailable = !isUser && UUID_PATTERN.test(feedbackTargetId);
+
+  async function sendFeedback(type: "helpful" | "not_helpful") {
+    if (!feedbackAvailable || feedbackBusy) return;
+    setFeedbackBusy(true);
+    setFeedbackError(null);
+    try {
+      await submitResponseFeedback({
+        targetType: "response",
+        targetId: feedbackTargetId,
+        feedbackType: type,
+        conversationId,
+      });
+      setFeedback(type);
+    } catch (error) {
+      setFeedbackError(error instanceof Error ? error.message : "Feedback could not be saved.");
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }
 
   useEffect(() => {
     return () => {
@@ -343,6 +374,36 @@ export default function ChatMessage({
                 <RotateCcw size={12} /> Regenerate
               </button>
             )}
+
+            {feedbackAvailable && (
+              feedback ? (
+                <span className="text-[11px] text-emerald-300/80">
+                  {feedback === "helpful" ? "Marked helpful" : "Feedback saved"}
+                </span>
+              ) : (
+                <>
+                  <button
+                    onClick={() => void sendFeedback("helpful")}
+                    disabled={feedbackBusy}
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 opacity-70 transition hover:bg-emerald-300/[0.07] hover:text-emerald-200 disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100"
+                    aria-label="Mark response helpful"
+                    title="Helpful response"
+                  >
+                    <ThumbsUp size={12} />
+                  </button>
+                  <button
+                    onClick={() => void sendFeedback("not_helpful")}
+                    disabled={feedbackBusy}
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 opacity-70 transition hover:bg-rose-300/[0.07] hover:text-rose-200 disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100"
+                    aria-label="Mark response not helpful"
+                    title="Not helpful"
+                  >
+                    <ThumbsDown size={12} />
+                  </button>
+                </>
+              )
+            )}
+            {feedbackError && <span className="text-[11px] text-rose-300/80">{feedbackError}</span>}
           </div>
         )}
       </div>

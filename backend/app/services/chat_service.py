@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models.adaptive import AdaptiveProcessingJob
 from app.models.message import Message
 from app.models.memory import MemoryExtractionJob
 from app.repositories.conversation_repository import ConversationRepository
@@ -118,6 +119,13 @@ def complete_turn(
         )
         conversations.update_last_message_at(conversation, datetime.now(timezone.utc))
         db.add(MemoryExtractionJob(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant.message_id,
+            status="pending",
+        ))
+        db.add(AdaptiveProcessingJob(
             user_id=user_id,
             conversation_id=conversation_id,
             user_message_id=user_message_id,

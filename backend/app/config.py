@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     retrieval_weight_recency: float = Field(default=0.10, ge=0, le=1)
     retrieval_weight_category: float = Field(default=0.10, ge=0, le=1)
     retrieval_weight_usage: float = Field(default=0.05, ge=0, le=1)
+    retrieval_weight_utility: float = Field(default=0.05, ge=0, le=1)
     retrieval_half_life_education_days: int = Field(default=2500, ge=1, le=36500)
     retrieval_half_life_career_days: int = Field(default=900, ge=1, le=36500)
     retrieval_half_life_preferences_days: int = Field(default=3000, ge=1, le=36500)
@@ -76,6 +77,17 @@ class Settings(BaseSettings):
     retrieval_half_life_personal_days: int = Field(default=1800, ge=1, le=36500)
     retrieval_half_life_other_days: int = Field(default=600, ge=1, le=36500)
     retrieval_min_importance: float = Field(default=0.0, ge=0, le=1)
+    adaptive_processing_enabled: bool = True
+    adaptive_job_max_attempts: int = Field(default=5, ge=1, le=20)
+    adaptive_preference_confidence_threshold: float = Field(default=0.6, ge=0, le=1)
+    adaptive_preference_evidence_threshold: int = Field(default=3, ge=2, le=20)
+    adaptive_pattern_evidence_threshold: int = Field(default=2, ge=2, le=20)
+    adaptive_outdated_utility_threshold: float = Field(default=0.2, ge=0, le=1)
+    adaptive_outdated_age_multiplier: float = Field(default=2.0, ge=1, le=10)
+    adaptive_max_preferences_in_context: int = Field(default=3, ge=1, le=10)
+    adaptive_max_pattern_messages: int = Field(default=120, ge=10, le=1000)
+    adaptive_feedback_context_window_minutes: int = Field(default=30, ge=1, le=1440)
+    adaptive_job_interval_seconds: int = Field(default=60, ge=10, le=3600)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

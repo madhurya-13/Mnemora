@@ -39,6 +39,10 @@ class ChatResponse(BaseModel):
     conversation_id: UUID
     response: str
     role: Literal["assistant"] = "assistant"
+    assistant_message_id: UUID | None = Field(
+        default=None,
+        description="Persisted assistant message ID, used for response feedback.",
+    )
     memories_used: list[str] = Field(
         default_factory=list,
         description="Approved memories actually retrieved for this turn. Empty when none were used.",

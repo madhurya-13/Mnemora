@@ -38,6 +38,7 @@ function toDisplayMessages(conversation: ConversationDetail, previews: Map<strin
       ? conversation.messages.slice(0, index).reverse().find((prior) => prior.role === "user")?.content
       : undefined,
     imagePreviewUrl: message.role === "user" ? previewFor(conversation.conversation_id, message.content, previews) : undefined,
+    assistantMessageId: message.role === "assistant" ? message.message_id : undefined,
   })).map((message, index, all) => {
     if (message.role !== "assistant" || !memories.length) return message;
     const lastAssistant = all.findLastIndex((item) => item.role === "assistant");
@@ -241,7 +242,7 @@ export default function ChatApp() {
       if (imageFile) {
         const response = await sendMessageWithImage(targetConversationId, message, imageFile);
         memoriesRef.current[targetConversationId] = response.memories_used ?? [];
-        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: response.response, pending: false, memoriesUsed: response.memories_used ?? [] } : item));
+        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: response.response, pending: false, assistantMessageId: response.assistant_message_id ?? undefined, memoriesUsed: response.memories_used ?? [] } : item));
         const [detail] = await Promise.all([getConversation(targetConversationId), refreshConversations()]);
         if (activeIdRef.current === targetConversationId) showDetail(detail);
         return response.response;
@@ -270,7 +271,9 @@ export default function ChatApp() {
               : item));
           } else if (event.event === "done") {
             completed = true;
-            setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, pending: false } : item));
+            setMessages((current) => current.map((item) => item.id === assistantId
+              ? { ...item, pending: false, assistantMessageId: event.data.assistant_message_id ?? undefined }
+              : item));
           }
         },
       );
@@ -419,7 +422,7 @@ export default function ChatApp() {
               : <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-7 px-4 py-8 sm:px-8 sm:py-10" role="log" aria-label="Conversation messages">
                 {messages.map((message) => message.pending && !message.content
                   ? <TypingIndicator key={message.id} />
-                  : <ChatMessage key={message.id} message={message} canRegenerate={message.id === messages.at(-1)?.id} onRetry={(prompt, regenerate = false) => retry(prompt, regenerate, message.id)} />)}
+                  : <ChatMessage key={message.id} message={message} conversationId={activeId} canRegenerate={message.id === messages.at(-1)?.id} onRetry={(prompt, regenerate = false) => retry(prompt, regenerate, message.id)} />)}
                 <div ref={bottomRef} />
               </div>}
         </div>

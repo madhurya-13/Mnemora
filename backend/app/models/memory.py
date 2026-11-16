@@ -20,6 +20,10 @@ class Memory(Base):
         CheckConstraint("approval_status IN ('pending', 'approved', 'rejected')", name="ck_memories_approval_status"),
         CheckConstraint("memory_type IN ('stable', 'temporary')", name="ck_memories_type"),
         CheckConstraint("vector_sync_status IN ('not_required', 'pending', 'synced', 'failed')", name="ck_memories_vector_sync"),
+        CheckConstraint(
+            "lifecycle_status IN ('active', 'possibly_outdated', 'superseded', 'expired', 'archived', 'pending_review')",
+            name="ck_memories_lifecycle_status",
+        ),
         Index("ix_memories_user_approval", "user_id", "approval_status"),
         Index("ix_memories_user_category", "user_id", "category"),
         Index("ix_memories_updated", "user_id", "updated_at"),
@@ -40,6 +44,11 @@ class Memory(Base):
     approval_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     similar_memory_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     vector_sync_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_required")
+    lifecycle_status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
+    utility_score: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
@@ -103,6 +112,8 @@ class MemoryHistory(Base):
     memory_type: Mapped[str] = mapped_column(String(16), nullable=False)
     approval_status: Mapped[str] = mapped_column(String(16), nullable=False)
     change_reason: Mapped[str] = mapped_column(String(80), nullable=False, default="user_update")
+    change_type: Mapped[str] = mapped_column(String(40), nullable=False, default="user_update")
+    source_conversation_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 

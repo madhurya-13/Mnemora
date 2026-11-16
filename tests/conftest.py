@@ -35,6 +35,7 @@ def temporary_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return 0
 
     monkeypatch.setattr(chat_api, "process_pending_jobs", do_not_process_background_jobs)
+    monkeypatch.setattr(chat_api, "process_adaptive_jobs", do_not_process_background_jobs)
     yield state
     app.dependency_overrides.pop(get_db, None)
     state["engine"].dispose()

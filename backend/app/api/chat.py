@@ -32,6 +32,7 @@ from app.services.llm_service import (
     LLMUnavailableError,
 )
 from app.services.session_service import get_current_user
+from app.services.adaptive_memory.workflow import process_adaptive_jobs
 from app.services.voice.preferences import get_preferences
 from app.services.vision import (
     ImageProcessingError,
@@ -60,9 +61,11 @@ def _sse(event: str, data: object) -> str:
 
 
 def _memory_labels(blocks: list[str]) -> list[str]:
-    """Surface only the memory lines that retrieval actually placed in context."""
+    """Surface only memory lines that retrieval actually placed in context."""
     labels: list[str] = []
     for block in blocks:
+        if not block.startswith("RELEVANT USER CONTEXT:"):
+            continue
         for line in block.splitlines():
             stripped = line.strip()
             if stripped.startswith("- "):
@@ -70,6 +73,18 @@ def _memory_labels(blocks: list[str]) -> list[str]:
                 if label:
                     labels.append(label[:240])
     return labels
+
+
+async def _process_post_turn(factory: sessionmaker) -> None:
+    """Run durable extraction and adaptive work without blocking the response."""
+    try:
+        await process_pending_jobs(factory)
+    except Exception:
+        logger.exception("Post-turn memory extraction failed.")
+    try:
+        await process_adaptive_jobs(factory)
+    except Exception:
+        logger.exception("Post-turn adaptive processing failed.")
 
 
 def _image_user_message(filename: str, user_text: str, visual_analysis: str) -> str:
@@ -146,16 +161,17 @@ async def chat(
             result = await respond(str(prepared.conversation_id), payload.message, prepared.history, memory_context)
         else:
             result = await respond(str(prepared.conversation_id), payload.message, prepared.history)
-        chat_service.complete_turn(
+        assistant = chat_service.complete_turn(
             db, user.user_id, prepared.conversation_id, prepared.user_message_id, result.response
         )
         background_tasks.add_task(
-            process_pending_jobs,
+            _process_post_turn,
             sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False, expire_on_commit=False),
         )
         return ChatResponse(
             conversation_id=prepared.conversation_id,
             response=result.response,
+            assistant_message_id=assistant.message_id,
             memories_used=_memory_labels(memory_context),
         )
     except Exception as error:
@@ -200,10 +216,14 @@ async def chat_stream(
             if not response_text:
                 raise LLMRequestError("The AI service returned an empty response. Please try again.")
             with session_factory() as session:
-                chat_service.complete_turn(
+                assistant = chat_service.complete_turn(
                     session, user_id, conversation_id, user_message_id, response_text
                 )
-            yield _sse("done", {"conversation_id": str(conversation_id), "role": "assistant"})
+            yield _sse("done", {
+                "conversation_id": str(conversation_id),
+                "role": "assistant",
+                "assistant_message_id": str(assistant.message_id),
+            })
         except asyncio.CancelledError:
             _mark_failed(session_factory, user_id, conversation_id, user_message_id)
             raise
@@ -220,7 +240,7 @@ async def chat_stream(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        background=BackgroundTask(process_pending_jobs, session_factory),
+        background=BackgroundTask(_process_post_turn, session_factory),
     )
 
 
@@ -310,16 +330,17 @@ async def chat_with_image(
         else:
             result = await respond(str(prepared.conversation_id), assistant_prompt, prepared.history)
 
-        chat_service.complete_turn(
+        assistant = chat_service.complete_turn(
             db, user.user_id, prepared.conversation_id, prepared.user_message_id, result.response
         )
         background_tasks.add_task(
-            process_pending_jobs,
+            _process_post_turn,
             sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False, expire_on_commit=False),
         )
         return ChatResponse(
             conversation_id=prepared.conversation_id,
             response=result.response,
+            assistant_message_id=assistant.message_id,
             memories_used=_memory_labels(memory_context),
         )
     except Exception as error:
@@ -392,16 +413,17 @@ async def chat_with_audio(
         else:
             result = await respond(str(prepared.conversation_id), clean_text, prepared.history)
 
-        chat_service.complete_turn(
+        assistant = chat_service.complete_turn(
             db, user.user_id, prepared.conversation_id, prepared.user_message_id, result.response
         )
         background_tasks.add_task(
-            process_pending_jobs,
+            _process_post_turn,
             sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False, expire_on_commit=False),
         )
         return ChatResponse(
             conversation_id=prepared.conversation_id,
             response=result.response,
+            assistant_message_id=assistant.message_id,
             memories_used=_memory_labels(memory_context),
         )
     except Exception as error:

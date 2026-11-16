@@ -1,10 +1,10 @@
 # MNEMORA — An AI That Remembers, Learns and Evolves
 
-MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold, Milestone 2 added Gemini chat, and Milestone 3 added persistent guest-owned conversations. Milestone 4 adds reviewable long-term memories, relational metadata, Chroma vectors, semantic retrieval, and a memory dashboard. Milestone 5 adds retrieval intelligence, and Milestone 6 adds voice mode plus image and audio input. Agent orchestration remains future work.
+MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold, Milestone 2 added Gemini chat, and Milestone 3 added persistent guest-owned conversations. Milestone 4 adds reviewable long-term memories, relational metadata, Chroma vectors, semantic retrieval, and a memory dashboard. Milestone 5 adds retrieval intelligence, Milestone 6 adds voice mode plus image and audio input, and Milestone 7 adds adaptive memory with reviewable preference learning, memory evolution, decay, patterns, feedback and personalization.
 
 ## Objectives and planned capabilities
 
-The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. This repository implements conversational AI, persistent short-term history, the long-term memory pipeline, semantic retrieval, and voice/multimodal interaction. Knowledge graphs and advanced orchestration are future milestones.
+The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. This repository implements conversational AI, persistent short-term history, the long-term memory pipeline, semantic retrieval, voice/multimodal interaction, and adaptive preference/pattern/feedback learning. Knowledge graphs and advanced orchestration are future milestones.
 
 ## Technology and architecture
 
@@ -127,8 +127,9 @@ The project is connected to its GitHub repository. Local `.env` files, SQLite fi
 2. **Conversational AI Engine** — this milestone.
 3. **Short-term memory persistence** — durable, guest-owned conversation history (complete).
 4. **Long-term semantic memory** — implementation and runtime verification status are documented below.
-5. **Voice and knowledge views** — input/output and memory visualization.
-6. **Personalization and orchestration** — specialized agents and evolving user context.
+5. **Voice and knowledge views** — input/output and memory visualization (voice complete).
+6. **Adaptive memory and continuous learning** — implemented in Milestone 7.
+7. **Personalization and orchestration** — specialized agents and evolving user context.
 
 ## Milestone 1 checklist
 
@@ -350,3 +351,122 @@ npm run build
 ```
 
 The automated suite mocks provider calls. Manual acceptance should cover text chat, microphone permission and transcription, voice mode, TTS play/pause/stop, audio upload, image understanding, memory-aware voice/image turns, ownership isolation, and invalid/oversized/corrupted uploads.
+
+## Milestone 7 - Adaptive Memory and Continuous Learning
+
+Milestone 7 extends the existing memory engine instead of adding a separate learner. Adaptive analysis runs after a completed chat turn through a durable job, so normal chat is never blocked by it.
+
+### Architecture
+
+- `backend/app/services/adaptive_memory/preference_learner.py` converts repeated, explicit style/technology signals into reviewable preference candidates. A single message can never confirm a preference, sensitive text is ignored, and context-scoped requests such as "for this project" do not overwrite global preferences.
+- `memory_evolution.py` classifies content changes (`preference_modification`, `goal_modification`, `project_status_change`, `outdated_information`, `confirmed_replacement`, ...) while preserving the previous content in `memory_history`.
+- `memory_decay.py` computes a documented 0..1 utility score (importance 0.25, confidence 0.20, usage 0.20, recency 0.15, feedback 0.10, explicit approval 0.10, minus a capped 0.20 outdated penalty). It only moves memories between lifecycle states; it never deletes them.
+- `pattern_detector.py` requires repeated observations across at least two distinct conversations and keeps candidates reviewable.
+- `feedback_processor.py` stores immutable feedback events, applies conservative confidence/importance changes, and links response feedback to the most recent retrieval event when memory IDs are omitted.
+- `personalization_engine.py` selects only confirmed preferences that are relevant to the current query and returns a token-limited context block. General-knowledge questions and disabled personalization receive no preference context.
+- `workflow.py` claims durable `adaptive_processing_jobs` idempotently, retries bounded failures, and is processed after chat plus by a periodic worker.
+
+Lifecycle states are `active`, `possibly_outdated`, `superseded`, `expired`, `archived` and `pending_review`. Only `active` approved memories are retrieved. Archived memories remain visible and can be restored from the dashboard.
+
+### Database migration and backup
+
+Milestone 7 adds migration `0004_adaptive_memory` and the tables `adaptive_settings`, `user_preferences`, `memory_patterns`, `memory_feedback`, `adaptive_processing_jobs`. Back up the development database before upgrading:
+
+```powershell
+Set-Location backend
+Copy-Item memory_agent.db "memory_agent.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss').db"
+$env:PYTHONPATH = (Get-Location).Path
+python -m alembic upgrade head
+```
+
+Existing memories, conversations and messages are preserved. To test a migration on a copy first:
+
+```powershell
+Copy-Item memory_agent.db memory_agent.migration-test.db
+$env:DATABASE_URL = "sqlite:///./memory_agent.migration-test.db"
+python -m alembic upgrade head
+$env:DATABASE_URL = "sqlite:///./memory_agent.db"
+Remove-Item memory_agent.migration-test.db
+```
+
+### Adaptive configuration
+
+Optional backend variables (defaults shown) can be added to `backend/.env`:
+
+```dotenv
+ADAPTIVE_PROCESSING_ENABLED=true
+ADAPTIVE_JOB_MAX_ATTEMPTS=5
+ADAPTIVE_PREFERENCE_CONFIDENCE_THRESHOLD=0.6
+ADAPTIVE_PREFERENCE_EVIDENCE_THRESHOLD=3
+ADAPTIVE_PATTERN_EVIDENCE_THRESHOLD=2
+ADAPTIVE_OUTDATED_UTILITY_THRESHOLD=0.2
+ADAPTIVE_OUTDATED_AGE_MULTIPLIER=2.0
+ADAPTIVE_MAX_PREFERENCES_IN_CONTEXT=3
+ADAPTIVE_MAX_PATTERN_MESSAGES=120
+ADAPTIVE_FEEDBACK_CONTEXT_WINDOW_MINUTES=30
+ADAPTIVE_JOB_INTERVAL_SECONDS=60
+```
+
+No new Python or Node dependencies are required.
+
+### Adaptive API
+
+All routes require the existing guest/user identity and only return rows owned by that user:
+
+- `GET/POST /api/v1/memories/preferences`, `POST /api/v1/memories/preferences/{id}/confirm`, `PUT/DELETE /api/v1/memories/preferences/{id}`, `POST /api/v1/memories/preferences/{id}/reject`
+- `GET /api/v1/memories/evolution`
+- `GET /api/v1/memories/patterns`, `POST /api/v1/memories/patterns/{id}/confirm`, `POST /api/v1/memories/patterns/{id}/dismiss`
+- `POST/GET /api/v1/memories/feedback`, `GET /api/v1/memories/feedback/insights`
+- `GET /api/v1/memories/health`
+- `GET/PUT /api/v1/memories/adaptive-settings`
+- `GET /api/v1/memories/adaptive/status`, `POST /api/v1/memories/adaptive/process`
+- `POST /api/v1/memories/{id}/lifecycle`
+
+`POST /api/v1/memories/adaptive/process` is a manual, owner-scoped "run now" action for verification and recovery. The background worker normally does this automatically.
+
+### Using the adaptive dashboard
+
+1. Open `http://localhost:3001/memory` after starting both servers.
+2. Use **Learned preferences** to inspect evidence, confirm, edit, reject, disable or delete a preference.
+3. Use **Memory health**, **Memory evolution**, **Detected patterns** and **Feedback insights** to inspect real database values.
+4. Use **Adaptive settings** to disable preference learning, pattern detection, personalization or decay per user.
+5. Thumbs-up/thumbs-down buttons under assistant replies record response feedback. Feedback never rewrites the response or blindly deletes a memory.
+
+### Evaluation
+
+Run the reproducible synthetic evaluation (no provider calls, temporary database):
+
+```powershell
+$env:PYTHONPATH = (Join-Path (Get-Location) "backend")
+python scripts/adaptive_evaluation.py
+```
+
+Recorded results from the current implementation:
+
+- Preference detection: precision 1.00, recall 1.00, false preference rate 0.00 over 9 utterances.
+- Outdated-memory handling: accuracy 1.00 over 5 cases; all records preserved.
+- Conflict detection: accuracy 1.00 over 4 labelled pairs.
+- Personalization relevance: adaptive exact-match 1.00 vs baseline 0.25 over 4 queries; 0 irrelevant preferences selected.
+- Feedback processing: 5/5 checks passed.
+- In-process latency (local SQLite, synthetic data): baseline keyword scan ~0.008 ms, adaptive preference selection ~0.63 ms, full per-turn adaptive processing ~16.5 ms average over 10 turns. These are local microbenchmarks, not production latency guarantees.
+
+The dataset is small and deterministic. It demonstrates that the implemented signals behave as documented; it does not prove general-world accuracy.
+
+### Automated tests and limitations
+
+```powershell
+$env:PYTHONPATH = (Join-Path (Get-Location) "backend")
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+python -m pytest
+Set-Location frontend
+npm run lint
+npm run build
+```
+
+Known limitations:
+
+- Preference extraction is rule-based and intentionally conservative. It recognizes a documented set of style, language and workflow cues rather than arbitrary free-form preferences.
+- Pattern detection uses a small transparent vocabulary plus capitalized terms; it is not a full topic model.
+- Decay uses proxy signals and does not re-evaluate a flagged memory automatically. Users can restore a lifecycle state explicitly.
+- Personalization is relevance-filtered but still heuristic; explicit current instructions always take precedence.
+- Adaptive processing runs in-process. It avoids Redis/Kafka by design, so multiple backend workers are not coordinated beyond database claims.
