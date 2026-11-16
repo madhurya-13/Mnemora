@@ -381,6 +381,33 @@ def test_rejected_and_pending_memories_never_enter_approved_counts(temporary_dat
         memory_decay.evaluate_user(db, user.user_id, settings_row=get_adaptive_settings(db, user.user_id))
         health = memory_decay.memory_health(db, user.user_id)
         assert health["total_approved"] == 1
+        assert health["active"] == 1
+        assert health["possibly_outdated"] == 0
+
+
+def test_retrieval_stats_serializes_recent_events(temporary_database):
+    assert request("GET", "/api/v1/memories").status_code == 200
+    with temporary_database["factory"]() as db:
+        user = db.scalar(select(User))
+        memory = _memory(db, user, "User is building MNEMORA")
+        event = MemoryRetrievalEvent(
+            user_id=user.user_id, intent="project_help", query_type="personal",
+            candidate_count=1, selected_count=1, excluded_count=0, latency_ms=3.5,
+        )
+        db.add(event)
+        db.flush()
+        db.add(MemoryRetrievalItem(
+            event_id=event.event_id, memory_id=memory.memory_id, rank=1,
+            selected=True, reason="semantic match",
+        ))
+        db.commit()
+
+    response = request("GET", "/api/v1/memories/retrieval-stats")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["retrieval_count"] == 1
+    assert body["recent_events"][0]["intent"] == "project_help"
+    assert body["recent_events"][0]["latency_ms"] == 3.5
 
 
 # --- patterns ------------------------------------------------------------------

@@ -185,7 +185,7 @@ export default function MemoryDashboard() {
         {[["All memories", stats?.total], ["Approved", stats?.approved], ["Awaiting approval", stats?.pending], ["Index sync pending", stats?.vector_sync_pending]].map(([title, value]) => <div key={String(title)} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5"><p className="text-xs uppercase tracking-[0.16em] text-slate-500">{title}</p><p className="mt-3 text-3xl font-light text-slate-100">{loading ? "—" : value}</p></div>)}
       </section>
 
-      <AdaptiveMemoryPanel refreshKey={stats?.total ?? 0} />
+      <AdaptiveMemoryPanel refreshKey={stats ? `${stats.total}:${stats.approved}:${stats.pending}:${stats.rejected}` : 0} />
 
       <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="space-y-5">

@@ -38,7 +38,7 @@ function Section({ icon, title, hint, children }: { icon: React.ReactNode; title
   );
 }
 
-export default function AdaptiveMemoryPanel({ refreshKey = 0 }: { refreshKey?: number }) {
+export default function AdaptiveMemoryPanel({ refreshKey = 0 }: { refreshKey?: number | string }) {
   const [preferences, setPreferences] = useState<Preference[]>([]);
   const [patterns, setPatterns] = useState<Pattern[]>([]);
   const [health, setHealth] = useState<MemoryHealth | null>(null);

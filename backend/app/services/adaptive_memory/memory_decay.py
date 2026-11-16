@@ -154,7 +154,7 @@ def memory_health(db: Session, user_id: UUID) -> dict[str, Any]:
     memories = db.scalars(select(Memory).where(Memory.user_id == user_id)).all()
     approved = [memory for memory in memories if memory.approval_status == "approved"]
     counts: dict[str, int] = {}
-    for memory in memories:
+    for memory in approved:
         counts[memory.lifecycle_status] = counts.get(memory.lifecycle_status, 0) + 1
     usage = _usage_counts(db, user_id)
     frequently_used = sorted(

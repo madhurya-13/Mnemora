@@ -212,6 +212,8 @@ class MemoryHistoryResponse(BaseModel):
 
 
 class RetrievalEventSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     event_id: UUID
     intent: str
     query_type: str
