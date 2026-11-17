@@ -59,4 +59,12 @@ async def retrieve_context(db: Session, user_id: UUID, query: str) -> list[str]:
             blocks.append(personalization)
     except Exception as error:
         logger.warning("Personalization context skipped (%s).", type(error).__name__)
+    try:
+        from app.knowledge_graph import graph_retriever
+
+        graph_context = graph_retriever.build_context(db, user_id, query)
+        if graph_context:
+            blocks.append(graph_context)
+    except Exception as error:
+        logger.warning("Graph context skipped (%s).", type(error).__name__)
     return blocks

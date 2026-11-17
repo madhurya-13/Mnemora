@@ -18,6 +18,7 @@ from app.config import settings
 from app.database.db import get_db
 from app.models.user import User
 from app.memory.retriever import retrieve_context
+from app.knowledge_graph.graph_workflow import process_pending_graph_sync
 from app.memory.workflow import process_pending_jobs
 from app.repositories.conversation_repository import ConversationRepository
 from app.schemas.chat import ChatHealthResponse, ChatRequest, ChatResponse
@@ -81,6 +82,10 @@ async def _process_post_turn(factory: sessionmaker) -> None:
         await process_pending_jobs(factory)
     except Exception:
         logger.exception("Post-turn memory extraction failed.")
+    try:
+        await process_pending_graph_sync(factory)
+    except Exception:
+        logger.exception("Post-turn graph construction failed.")
     try:
         await process_adaptive_jobs(factory)
     except Exception:

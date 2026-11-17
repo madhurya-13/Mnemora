@@ -1,10 +1,10 @@
 # MNEMORA — An AI That Remembers, Learns and Evolves
 
-MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold, Milestone 2 added Gemini chat, and Milestone 3 added persistent guest-owned conversations. Milestone 4 adds reviewable long-term memories, relational metadata, Chroma vectors, semantic retrieval, and a memory dashboard. Milestone 5 adds retrieval intelligence, Milestone 6 adds voice mode plus image and audio input, and Milestone 7 adds adaptive memory with reviewable preference learning, memory evolution, decay, patterns, feedback and personalization.
+MNEMORA is a personal assistant designed to gain useful context over time. Milestone 1 established the project scaffold, Milestone 2 added Gemini chat, and Milestone 3 added persistent guest-owned conversations. Milestone 4 adds reviewable long-term memories, relational metadata, Chroma vectors, semantic retrieval, and a memory dashboard. Milestone 5 adds retrieval intelligence, Milestone 6 adds voice mode plus image and audio input, Milestone 7 adds adaptive memory with reviewable preference learning, memory evolution, decay, patterns, feedback and personalization, and Milestone 8 adds a persistent, user-scoped knowledge graph with multi-hop reasoning, temporal facts, visualization and full user control.
 
 ## Objectives and planned capabilities
 
-The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. This repository implements conversational AI, persistent short-term history, the long-term memory pipeline, semantic retrieval, voice/multimodal interaction, and adaptive preference/pattern/feedback learning. Knowledge graphs and advanced orchestration are future milestones.
+The planned product includes conversational AI, short and long-term memory, semantic retrieval, voice input/output, memory extraction and categorization, knowledge graph visualization, contradiction detection, personalization and multi-agent orchestration. This repository implements conversational AI, persistent short-term history, the long-term memory pipeline, semantic retrieval, voice/multimodal interaction, adaptive preference/pattern/feedback learning, and a persistent knowledge graph. Advanced multi-agent orchestration remains a future milestone.
 
 ## Technology and architecture
 
@@ -12,7 +12,7 @@ The planned product includes conversational AI, short and long-term memory, sema
 - **SQLAlchemy and Alembic** provide relational persistence and schema migrations; SQLite is the default and PostgreSQL is supported through `DATABASE_URL` and the psycopg driver.
 - **Google GenAI SDK** generates asynchronous Gemini chat responses and extracts memory candidates.
 - **OpenAI embeddings and persistent ChromaDB** power semantic indexing and retrieval. SQLAlchemy remains authoritative for memory content, approval state, and ownership; Redis is not used by this milestone.
-- **Next.js, React, TypeScript and Tailwind CSS** provide the responsive App Router dashboard. **Lucide React** supplies icons.
+- **Next.js, React, TypeScript and Tailwind CSS** provide the responsive App Router dashboard. **Lucide React** supplies icons, and **React Flow (`@xyflow/react`)** renders the interactive knowledge graph.
 
 The browser dashboard calls `GET /api/v1/health` using `NEXT_PUBLIC_API_URL`. FastAPI allows the configured `FRONTEND_URL` origin. Backend settings remain server-side; no API key is put in frontend configuration.
 
@@ -21,19 +21,21 @@ The browser dashboard calls `GET /api/v1/health` using `NEXT_PUBLIC_API_URL`. Fa
 ```text
 backend/
   app/
-    agents/       memory/       voice/
-    api/          database/     models/
-    schemas/      services/     utils/
-    config.py     main.py
+    agents/       knowledge_graph/   memory/
+    api/          database/          models/
+    retrieval/    schemas/           services/
+    voice/        config.py          main.py
+  alembic/versions/
   requirements.txt
   .env.example
 frontend/
-  app/            components/   hooks/
+  app/            app/graph/        components/
+  components/graph/                  hooks/
   lib/            public/
   package.json
   .env.local.example
 tests/
-  test_health.py
+  test_knowledge_graph.py
 .gitignore
 README.md
 ```
@@ -101,6 +103,21 @@ Visit `http://localhost:3000`. The dashboard shows backend/database availability
 | POST | `/api/v1/memories/{id}/reject` | Reject a pending memory |
 | GET | `/api/v1/memories/stats` | Read real memory, category, and sync statistics |
 | POST | `/api/v1/memories/extractions/retry` | Retry failed extraction jobs |
+| GET | `/api/v1/graph/health` | Graph feature flag, row counts and sync status |
+| GET, POST | `/api/v1/graph/entities` | List or create owned entities |
+| GET, PATCH, DELETE | `/api/v1/graph/entities/{id}` | Read details, edit or archive an entity |
+| POST | `/api/v1/graph/entities/merge` | Merge a confirmed duplicate (undoable) |
+| POST | `/api/v1/graph/entities/merge/{id}/undo` | Restore a merged entity and its relationships |
+| GET | `/api/v1/graph/entities/{id}/connections` | Bounded neighbour expansion for the visualizer |
+| GET | `/api/v1/graph/entities/{id}/history` | Entity and relationship audit history |
+| GET, POST | `/api/v1/graph/relationships` | List or create owned relationships |
+| GET, PATCH, DELETE | `/api/v1/graph/relationships/{id}` | Read, correct or archive a relationship |
+| GET | `/api/v1/graph/visualization` | Filtered nodes/edges for the graph canvas |
+| POST | `/api/v1/graph/search` | Natural-language graph question with paths |
+| POST | `/api/v1/graph/traverse` | Bounded multi-hop traversal from one entity |
+| GET | `/api/v1/graph/insights` | Statistics computed from stored rows |
+| GET | `/api/v1/graph/activity` | Construction and correction history |
+| POST | `/api/v1/graph/rebuild` | Idempotent rebuild from stored memories |
 
 The legacy `/api/v1/chat/conversations` routes remain available for compatibility. A random guest token is held in an HttpOnly cookie; the database stores only its SHA-256 hash. Conversation reads and writes are scoped to that guest. The browser stores only the active conversation ID in local storage. Failed model requests retain the user message with `failed` status; partial assistant output is never persisted. Model context is limited by `CHAT_MAX_HISTORY_MESSAGES`.
 
@@ -127,9 +144,10 @@ The project is connected to its GitHub repository. Local `.env` files, SQLite fi
 2. **Conversational AI Engine** — this milestone.
 3. **Short-term memory persistence** — durable, guest-owned conversation history (complete).
 4. **Long-term semantic memory** — implementation and runtime verification status are documented below.
-5. **Voice and knowledge views** — input/output and memory visualization (voice complete).
+5. **Voice and knowledge views** — voice/multimodal input complete; knowledge graph view complete in Milestone 8.
 6. **Adaptive memory and continuous learning** — implemented in Milestone 7.
 7. **Personalization and orchestration** — specialized agents and evolving user context.
+8. **Persistent knowledge graph and relationship intelligence** — implemented in Milestone 8.
 
 ## Milestone 1 checklist
 
@@ -470,3 +488,172 @@ Known limitations:
 - Decay uses proxy signals and does not re-evaluate a flagged memory automatically. Users can restore a lifecycle state explicitly.
 - Personalization is relevance-filtered but still heuristic; explicit current instructions always take precedence.
 - Adaptive processing runs in-process. It avoids Redis/Kafka by design, so multiple backend workers are not coordinated beyond database claims.
+
+## Milestone 8 - Persistent Knowledge Graph and Relationship Intelligence
+
+Milestone 8 adds a relational, user-scoped knowledge graph as an enrichment layer on top of the Milestone 4-7 memory engine. It does not replace memories, retrieval, voice or adaptive learning, and it does not introduce a graph database. SQLite/PostgreSQL rows remain authoritative for every entity, relationship and piece of evidence.
+
+### Architecture
+
+| Layer | Implementation |
+| --- | --- |
+| Extraction | `backend/app/knowledge_graph/entity_extractor.py` recognises explicit people, projects, technologies, languages, institutions, goals, interests and concepts, including a bounded set of aliases. `relationship_extractor.py` only emits an edge when an explicit verb or connective supports it. |
+| Construction | `graph_builder.py` normalises names, resolves identities, validates source/target type pairs and persists entities, relationships, evidence and `GraphSyncRecord` jobs idempotently. `graph_workflow.py` claims durable jobs and retries bounded failures. |
+| Identity | `graph_merger.py` merges exact, normalised and alias matches automatically. Fuzzy name similarity (>= 0.80) is only a suggestion; a user-confirmed merge records a snapshot that can be undone. |
+| Temporal | `graph_updater.py` supersedes earlier facts only when the language explicitly changes or replaces them. The previous edge becomes `historical` with `valid_until` and `superseded_by`; no history is deleted. |
+| Retrieval | `graph_traversal.py` performs bounded breadth-first traversal with node/edge/depth caps. `graph_ranker.py` scores confidence, depth, recency and evidence. `graph_retriever.py` returns a compact, labelled `CONNECTED KNOWLEDGE` block with DIRECT and INFERRED (n-hop) paths. |
+| Visualization | `graph_visualizer.py` produces filtered node/edge payloads. `backend/app/api/graph.py` exposes all graph endpoints; the React Flow dashboard lives at `/graph`. |
+| Analytics | `graph_insights.py` computes counts, growth, most-connected entities, isolated entities, evidence coverage and sync health from stored rows only. |
+
+Chat never depends on the graph. After a completed turn, `chat_service` queues a `GraphSyncRecord`; `api/chat.py` processes pending graph work after the response. A periodic worker starts with the app and retries failures. Any graph exception is logged and skipped by `memory/retriever.py`, so chat and Milestones 1-7 keep working.
+
+### Extraction and approval lifecycle
+
+The graph has two evidence stages:
+
+1. A chat turn creates `pending_review` entities and relationships. Pending facts are excluded from retrieval and the default visualization.
+2. Approving a memory re-syncs its source user message with `approved=True`, attaches the memory ID as evidence and activates matching facts. Manual facts created in the dashboard are user-confirmed and active immediately.
+
+If no explicit verb or connective supports an edge, no edge is stored. The extractor never invents entities, merges uncertain duplicates automatically, or promotes pending facts. `POST /api/v1/graph/rebuild` is idempotent and only re-reads stored memories.
+
+### Storage and migration
+
+Migration `0005_knowledge_graph` adds five tables and does not modify existing rows:
+
+- `graph_entities` - identity, type, aliases, confidence, source memory IDs, status, merge pointer and observation timestamps.
+- `graph_relationships` - directed source/target, type, confidence, evidence memory IDs and excerpts, validity window, status and supersession pointer.
+- `graph_history` - immutable audit entries for construction, correction, merge and archive actions.
+- `graph_merge_records` - merge snapshots and undo state.
+- `graph_sync_records` - durable, idempotent construction work with attempt and error tracking.
+
+Indexes and constraints enforce ownership, valid status values, 0..1 confidence and distinct endpoints. Foreign keys cascade only when an entire user is removed.
+
+Back up the database before upgrading, then apply the migration from `backend`:
+
+```powershell
+Copy-Item memory_agent.db "memory_agent.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss').db"
+$env:PYTHONPATH = (Get-Location).Path
+python -m alembic upgrade head
+```
+
+### Retrieval and multi-hop reasoning
+
+Graph retrieval is query-focused and additive. It seeds from entities named in the question plus the user hub, traverses only active relationships supported by approved-memory or user-confirmed evidence, and ranks paths before rendering context. Example:
+
+```text
+CONNECTED KNOWLEDGE (user-scoped knowledge graph; only approved-memory or user-confirmed facts):
+- DIRECT: MNEMORA -BUILT_WITH-> FastAPI (technology) [confidence 0.81; evidence: approved memory]
+- INFERRED (2 hops): User -DEVELOPS-> MNEMORA -BUILT_WITH-> Next.js [confidence 0.72]
+```
+
+INFERRED means "composed from explicitly stored edges", not a logical or probabilistic invention. `graph_context_max_facts` and `graph_context_max_tokens` bound the block. Milestone 5 ranking and existing memory context are unchanged.
+
+### Visualization and user control
+
+Open **Knowledge Graph** from the chat sidebar or the Memory page, or visit `/graph`.
+
+- Filter by entity type, relationship type, name, depth and isolated entities.
+- Toggle historical facts; historical and pending edges are dashed and visually distinct.
+- Select a node to inspect type, confidence, aliases, source memories, connections, evidence and change history.
+- Select an edge to inspect endpoints, confidence, evidence, validity window and supersession.
+- Ask the graph a question to highlight matched entities and ranked paths.
+- Highlight a path between any two displayed entities.
+- Expand a node one hop, edit entity/relationship metadata, archive entities or relationships, and create manual facts.
+- Review possible duplicates, merge explicitly, and undo any merge from **Merge history**.
+- **Rebuild** re-derives the graph from stored memories and never deletes memories.
+
+### Graph API
+
+All routes are under `/api/v1/graph`, require the existing guest/user cookie and return only that owner's rows. Pagination is bounded, traversal depth is capped by `GRAPH_MAX_DEPTH`, and node/edge limits are enforced server-side.
+
+- `GET /health`
+- `GET|POST /entities`, `GET|PATCH|DELETE /entities/{id}`
+- `GET /entities/{id}/connections`, `GET /entities/{id}/history`
+- `POST /entities/merge`, `GET /merges`, `POST /entities/merge/{id}/undo`
+- `GET|POST /relationships`, `GET|PATCH|DELETE /relationships/{id}`
+- `GET /visualization`, `POST /search`, `POST /traverse`
+- `GET /insights`, `GET /activity`, `POST /rebuild`
+
+### Configuration
+
+Optional backend variables (defaults shown):
+
+```dotenv
+KNOWLEDGE_GRAPH_ENABLED=true
+GRAPH_MAX_DEPTH=3
+GRAPH_DEFAULT_DEPTH=2
+GRAPH_MAX_NODES=150
+GRAPH_MAX_EDGES=300
+GRAPH_CONTEXT_MAX_FACTS=8
+GRAPH_CONTEXT_MAX_TOKENS=400
+GRAPH_MIN_CONFIDENCE=0.3
+GRAPH_MAX_ALIASES=12
+GRAPH_JOB_MAX_ATTEMPTS=5
+GRAPH_JOB_INTERVAL_SECONDS=60
+GRAPH_MAX_REBUILD_MEMORIES=500
+GRAPH_AUTO_ACTIVATE_ON_APPROVAL=true
+```
+
+No new backend dependency is required. The graph uses the existing SQLAlchemy, FastAPI and Pydantic stack. The frontend adds `@xyflow/react` (React Flow) to `package.json`; run `npm install` after pulling.
+
+### Phase A-F manual verification in VS Code
+
+**Phase A - setup.** Back up and migrate the database as shown above; start the backend and frontend in separate terminals. Open `/graph` and confirm the health/feature state, empty state or existing nodes, and no console errors.
+
+**Phase B - construction.** In chat, send: "I am developing MNEMORA using FastAPI and Next.js. MNEMORA is an AI assistant with persistent memory." Wait for the response, then open **Memory** and approve the pending memory candidates. Return to `/graph` and confirm entities `User`, `MNEMORA`, `FastAPI`, `Next.js` and `Persistent Memory` with active `DEVELOPS`, `BUILT_WITH` and `HAS_FEATURE` edges.
+
+**Phase C - inspect and filter.** Select each node and edge; verify type, confidence, evidence IDs, temporal fields and audit entries. Filter to `technology`, toggle isolated entities, raise/lower depth, and refresh the page to confirm persistence.
+
+**Phase D - multi-hop retrieval.** Ask the graph "What technologies am I using in MNEMORA?" and confirm matched entities plus direct and inferred paths. In a new chat conversation, ask the same question and confirm only approved facts appear (no pending facts). Toggle `KNOWLEDGE_GRAPH_ENABLED=false`, restart, and confirm normal chat still works without graph context.
+
+**Phase E - control and history.** Create a near-duplicate entity, open the original entity, and confirm the duplicate suggestion requires confirmation. Merge it, verify relationships moved, then undo from **Merge history** and confirm the entity returns. Edit and archive a relationship; toggle historical facts to see archived/historical rows. Delete a throwaway entity and confirm source memories remain.
+
+**Phase F - regression.** Run the backend suite, frontend lint and production build. Confirm `/`, `/memory`, `/graph` build and that Milestones 1-7 flows (chat, approval, retrieval, voice settings, adaptive panels) still work.
+
+Automated tests from the repository root:
+
+```powershell
+$env:PYTHONPATH = (Join-Path (Get-Location) "backend")
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+python -m pytest
+Set-Location frontend
+npm run lint
+npm run build
+```
+
+The suite currently reports **121 passed**, including 25 knowledge-graph tests covering extraction, explicit-cue rejection, normalisation, evidence, idempotency, approval activation, pending-fact exclusion, temporal supersession, bounded traversal, endpoint validation, merge/undo, owner isolation, retrieval context and prior milestones.
+
+### Troubleshooting
+
+- **`/graph` is empty after a chat turn.** Conversation facts start as pending. Approve the memory candidates on the Memory page; approval activates matching facts. Pending facts are intentionally hidden from retrieval and the default canvas.
+- **Expected entities are missing.** Extraction only stores explicit mentions and explicit relationship cues. Rephrase with a clear verb ("I am developing X using Y"), then approve the resulting memory. Use **Rebuild** to re-read existing memories.
+- **A relationship disappeared.** It may be archived, historical, pending, or filtered out. Enable **Historical facts**, clear type filters, and inspect the entity history.
+- **Traversal returns 422.** `max_depth` is capped by `GRAPH_MAX_DEPTH` (default 3). Lower the request or change the backend setting and restart.
+- **Dashboard shows a request error.** Confirm the backend is running at `NEXT_PUBLIC_API_URL`, the migration `0005_knowledge_graph` is applied, and the browser session has not changed (graph rows are owner-scoped).
+- **Graph sync is failing.** Check `GET /api/v1/graph/health` and `GET /api/v1/graph/activity`, then use **Rebuild**. Failures never block chat or memory operations.
+
+### Milestone 8 checklist
+
+- [x] Relational, owner-scoped entities and relationships with evidence and confidence
+- [x] Additive migration `0005_knowledge_graph` preserving Milestones 1-7 data
+- [x] Deterministic extraction with explicit-cue requirement and no invented edges
+- [x] Pending-fact isolation and approval-driven activation
+- [x] Idempotent, retryable construction with bounded failures
+- [x] Temporal history, supersession and immutable audit records
+- [x] Conservative deduplication, confirmed merges and undo
+- [x] Bounded multi-hop traversal, ranking and labelled reasoning context
+- [x] Additive chat integration that cannot break existing retrieval
+- [x] Interactive React Flow dashboard with filters, search, paths and controls
+- [x] All graph endpoints authenticated, owner-scoped, validated and paginated
+- [x] Insights and activity computed from stored rows
+- [x] Automated tests for extraction, persistence, dedupe, temporal, retrieval, security and prior milestones
+
+### Known limitations
+
+- Extraction is deterministic and intentionally narrow. It recognises the documented entity and relationship vocabulary plus explicit aliases; unusual phrasings may yield fewer edges rather than guessed ones.
+- The graph is single-user scoped. There is no shared/global entity graph or cross-user merge.
+- INFERRED paths are compositions of stored edges, not a general logical reasoner. Traversal is bounded by configured depth, nodes and edges.
+- SQLite and PostgreSQL are supported through existing SQLAlchemy configuration. No Neo4j or external graph service is used, by design.
+- Automatic construction depends on a successful chat turn. Graph retries are in-process and database-claimed, so multiple backend workers are not coordinated beyond that.
+- The canvas uses a deterministic radial layout, not a force-directed simulation. Large graphs are truncated by the configured limits and should be narrowed with filters.
+- Live chat verification requires a working Gemini key. Graph tests and rebuilds do not call a model.

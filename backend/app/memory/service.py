@@ -57,6 +57,25 @@ def _enqueue(db: Session, memory: Memory, operation: str = "upsert") -> None:
     db.add(MemoryVectorOutbox(memory_id=memory.memory_id, user_id=memory.user_id, operation=operation))
 
 
+def _sync_graph_safe(db: Session, user_id: UUID, memory: Memory, *, withdraw: bool = False) -> None:
+    """Mirror memory changes into the graph; graph failures never break memory APIs."""
+    try:
+        if withdraw:
+            from app.knowledge_graph.graph_updater import withdraw_memory
+
+            withdraw_memory(db, user_id, memory.memory_id)
+        else:
+            from app.knowledge_graph.graph_builder import sync_memory
+
+            sync_memory(db, user_id, memory)
+    except Exception as error:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("Graph sync skipped (%s).", type(error).__name__)
+
+
 def _record_history(db: Session, memory: Memory, reason: str, *, change_type: str | None = None, source_conversation_id: UUID | None = None) -> None:
     db.add(MemoryHistory(
         memory_id=memory.memory_id, user_id=memory.user_id, content=memory.content,
@@ -222,6 +241,7 @@ async def approve_memory(db: Session, user_id: UUID, memory_id: UUID) -> Memory:
     _enqueue(db, memory)
     db.commit()
     db.refresh(memory)
+    _sync_graph_safe(db, user_id, memory)
     return memory
 
 
@@ -244,6 +264,7 @@ def reject_memory(db: Session, user_id: UUID, memory_id: UUID) -> Memory:
         conflict.resolved_at = _now()
     db.commit()
     db.refresh(memory)
+    _sync_graph_safe(db, user_id, memory, withdraw=True)
     return memory
 
 
@@ -376,6 +397,7 @@ def update_memory(db: Session, user_id: UUID, memory_id: UUID, changes: dict[str
         _enqueue(db, memory)
     db.commit()
     db.refresh(memory)
+    _sync_graph_safe(db, user_id, memory)
     return memory
 
 
@@ -401,6 +423,7 @@ async def delete_memory(db: Session, user_id: UUID, memory_id: UUID) -> bool:
         db.add(MemoryVectorOutbox(memory_id=memory_id, user_id=user_id, operation="delete"))
     db.delete(memory)
     db.commit()
+    _sync_graph_safe(db, user_id, memory, withdraw=True)
     return needs_vector_delete
 
 

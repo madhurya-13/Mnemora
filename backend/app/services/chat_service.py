@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.adaptive import AdaptiveProcessingJob
+from app.models.graph import GraphSyncRecord
 from app.models.message import Message
 from app.models.memory import MemoryExtractionJob
 from app.repositories.conversation_repository import ConversationRepository
@@ -130,6 +131,12 @@ def complete_turn(
             conversation_id=conversation_id,
             user_message_id=user_message_id,
             assistant_message_id=assistant.message_id,
+            status="pending",
+        ))
+        db.add(GraphSyncRecord(
+            user_id=user_id,
+            source_type="message",
+            source_id=str(user_message_id),
             status="pending",
         ))
         db.commit()

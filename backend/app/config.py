@@ -88,6 +88,19 @@ class Settings(BaseSettings):
     adaptive_max_pattern_messages: int = Field(default=120, ge=10, le=1000)
     adaptive_feedback_context_window_minutes: int = Field(default=30, ge=1, le=1440)
     adaptive_job_interval_seconds: int = Field(default=60, ge=10, le=3600)
+    knowledge_graph_enabled: bool = True
+    graph_max_depth: int = Field(default=3, ge=1, le=5)
+    graph_default_depth: int = Field(default=2, ge=1, le=5)
+    graph_max_nodes: int = Field(default=150, ge=10, le=500)
+    graph_max_edges: int = Field(default=300, ge=10, le=1000)
+    graph_context_max_facts: int = Field(default=8, ge=1, le=20)
+    graph_context_max_tokens: int = Field(default=400, ge=100, le=2000)
+    graph_min_confidence: float = Field(default=0.3, ge=0, le=1)
+    graph_max_aliases: int = Field(default=12, ge=1, le=50)
+    graph_job_max_attempts: int = Field(default=5, ge=1, le=20)
+    graph_job_interval_seconds: int = Field(default=60, ge=10, le=3600)
+    graph_max_rebuild_memories: int = Field(default=500, ge=10, le=5000)
+    graph_auto_activate_on_approval: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Check, Clock3, Database, Eye, LoaderCircle, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, Clock3, Database, Eye, LoaderCircle, Network, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import AdaptiveMemoryPanel from "@/components/AdaptiveMemoryPanel";
 import { ApiError, requestJson } from "@/lib/api";
 import {
@@ -171,7 +171,7 @@ export default function MemoryDashboard() {
     <header className="sticky top-0 z-20 border-b border-white/[0.07] bg-[#0a0c15]/95 px-4 py-4 backdrop-blur sm:px-8">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
         <div className="flex items-center gap-3"><Link href="/" className="rounded-lg p-2 text-slate-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Back to chat"><ArrowLeft size={18} /></Link><span className="grid h-10 w-10 place-items-center rounded-xl border border-violet-300/20 bg-violet-400/10 text-violet-200"><Database size={19} /></span><div><h1 className="text-lg font-medium">Memory</h1><p className="text-xs text-slate-500">Long-term context you control</p></div></div>
-        <Link href="/" className="rounded-xl border border-white/[0.08] px-3 py-2 text-xs text-slate-300 transition hover:border-violet-300/20 hover:text-violet-100">Return to chat</Link>
+        <div className="flex items-center gap-2"><Link href="/graph" className="inline-flex items-center gap-1.5 rounded-xl border border-white/[0.08] px-3 py-2 text-xs text-slate-300 transition hover:border-blue-300/20 hover:text-blue-100"><Network size={13} /> Knowledge graph</Link><Link href="/" className="rounded-xl border border-white/[0.08] px-3 py-2 text-xs text-slate-300 transition hover:border-violet-300/20 hover:text-violet-100">Return to chat</Link></div>
       </div>
     </header>
 

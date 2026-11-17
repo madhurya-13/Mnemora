@@ -8,6 +8,13 @@ from app.models.adaptive import (
     UserPreference,
 )
 from app.models.conversation import Conversation
+from app.models.graph import (
+    GraphEntity,
+    GraphHistory,
+    GraphMergeRecord,
+    GraphRelationship,
+    GraphSyncRecord,
+)
 from app.models.message import Message
 from app.models.memory import (
     Memory, MemoryConflict, MemoryExtractionJob, MemoryHistory,
@@ -16,8 +23,9 @@ from app.models.memory import (
 from app.models.user import User
 
 __all__ = [
-    "AdaptiveProcessingJob", "AdaptiveSettings", "Conversation", "Memory", "MemoryConflict",
-    "MemoryExtractionJob", "MemoryFeedback", "MemoryHistory", "MemoryPattern",
-    "MemoryRetrievalEvent", "MemoryRetrievalItem", "MemoryVectorOutbox", "Message",
-    "User", "UserPreference",
+    "AdaptiveProcessingJob", "AdaptiveSettings", "Conversation", "GraphEntity",
+    "GraphHistory", "GraphMergeRecord", "GraphRelationship", "GraphSyncRecord",
+    "Memory", "MemoryConflict", "MemoryExtractionJob", "MemoryFeedback",
+    "MemoryHistory", "MemoryPattern", "MemoryRetrievalEvent", "MemoryRetrievalItem",
+    "MemoryVectorOutbox", "Message", "User", "UserPreference",
 ]

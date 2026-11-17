@@ -18,10 +18,12 @@ from app.api.adaptive import router as adaptive_router
 from app.api.chat import router as chat_router
 from app.api.conversations import legacy_router as legacy_conversations_router
 from app.api.conversations import router as conversations_router
+from app.api.graph import router as graph_router
 from app.api.memories import router as memories_router
 from app.api.voice import router as voice_router
 from app.config import settings
 from app.database.db import get_db
+from app.knowledge_graph.graph_workflow import graph_retry_worker
 from app.memory.workflow import retry_worker
 from app.services.adaptive_memory.workflow import adaptive_retry_worker
 
@@ -30,12 +32,14 @@ from app.services.adaptive_memory.workflow import adaptive_retry_worker
 async def lifespan(_: FastAPI):
     worker = asyncio.create_task(retry_worker())
     adaptive_worker = asyncio.create_task(adaptive_retry_worker())
+    graph_worker = asyncio.create_task(graph_retry_worker())
     try:
         yield
     finally:
-        for task in (worker, adaptive_worker):
+        tasks = (worker, adaptive_worker, graph_worker)
+        for task in tasks:
             task.cancel()
-        for task in (worker, adaptive_worker):
+        for task in tasks:
             try:
                 await task
             except asyncio.CancelledError:
@@ -63,6 +67,7 @@ app.include_router(legacy_conversations_router)
 app.include_router(adaptive_router)
 app.include_router(memories_router)
 app.include_router(voice_router)
+app.include_router(graph_router)
 
 
 @app.exception_handler(RequestValidationError)
