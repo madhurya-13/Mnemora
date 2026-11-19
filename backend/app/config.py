@@ -101,6 +101,27 @@ class Settings(BaseSettings):
     graph_job_interval_seconds: int = Field(default=60, ge=10, le=3600)
     graph_max_rebuild_memories: int = Field(default=500, ge=10, le=5000)
     graph_auto_activate_on_approval: bool = True
+    agents_enabled: bool = True
+    agent_max_tasks_per_plan: int = Field(default=15, ge=1, le=40)
+    agent_max_execution_seconds: int = Field(default=300, ge=5, le=3600)
+    agent_tool_timeout_seconds: float = Field(default=10.0, ge=0.5, le=120)
+    agent_max_tool_retries: int = Field(default=2, ge=0, le=5)
+    agent_retry_backoff_seconds: float = Field(default=0.2, ge=0, le=10)
+    agent_max_concurrent_executions: int = Field(default=3, ge=1, le=10)
+    agent_rate_limit_executions_per_hour: int = Field(default=40, ge=1, le=1000)
+    agent_approval_ttl_minutes: int = Field(default=30, ge=1, le=1440)
+    agent_auto_approve_reversible: bool = True
+    agent_learning_enabled: bool = True
+    agent_pattern_threshold: int = Field(default=2, ge=2, le=20)
+    agent_context_max_memories: int = Field(default=8, ge=1, le=30)
+    agent_context_max_graph_facts: int = Field(default=8, ge=1, le=30)
+    agent_max_document_chars: int = Field(default=20000, ge=500, le=200000)
+    agent_max_result_chars: int = Field(default=8000, ge=500, le=50000)
+    agent_project_root: str = ""
+    agent_project_max_file_bytes: int = Field(default=200000, ge=1000, le=5000000)
+    agent_web_search_provider: str = ""
+    agent_web_search_api_key: str = ""
+    agent_web_search_timeout_seconds: int = Field(default=15, ge=3, le=60)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

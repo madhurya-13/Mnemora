@@ -7,6 +7,16 @@ from app.models.adaptive import (
     MemoryPattern,
     UserPreference,
 )
+from app.models.agent import (
+    AgentApproval,
+    AgentExecution,
+    AgentPlan,
+    AgentTask,
+    ExecutionEvent,
+    TaskVerification,
+    ToolInvocation,
+    WorkflowTemplate,
+)
 from app.models.conversation import Conversation
 from app.models.graph import (
     GraphEntity,
@@ -23,9 +33,11 @@ from app.models.memory import (
 from app.models.user import User
 
 __all__ = [
-    "AdaptiveProcessingJob", "AdaptiveSettings", "Conversation", "GraphEntity",
+    "AdaptiveProcessingJob", "AdaptiveSettings", "AgentApproval", "AgentExecution",
+    "AgentPlan", "AgentTask", "Conversation", "ExecutionEvent", "GraphEntity",
     "GraphHistory", "GraphMergeRecord", "GraphRelationship", "GraphSyncRecord",
     "Memory", "MemoryConflict", "MemoryExtractionJob", "MemoryFeedback",
     "MemoryHistory", "MemoryPattern", "MemoryRetrievalEvent", "MemoryRetrievalItem",
-    "MemoryVectorOutbox", "Message", "User", "UserPreference",
+    "MemoryVectorOutbox", "Message", "TaskVerification", "ToolInvocation", "User",
+    "UserPreference", "WorkflowTemplate",
 ]
